@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+
+	"github.com/ethereum/go-ethereum/logger"
+	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
@@ -17,6 +20,36 @@ type pssTester struct {
 	*Pss
 }
 
+type pssProtocolTester struct {
+	*PssProtocol
+}
+
+func TestPssProtocolStart(t *testing.T) {
+	addr := RandomAddr()
+	pt := newPssProtocolTester(t, addr, 2, []byte("foo"), 42)
+	
+	glog.V(logger.Detail).Infof("made protocoltester %v", pt.Name)
+}
+
+func newPssProtocolTester(t *testing.T, addr *peerAddr, n int, topic []byte, version uint) *pssProtocolTester {
+	bt := newPssTester(t, addr, n)
+	pt := &pssProtocolTester{
+		PssProtocol: &PssProtocol{
+			Pss: bt.Pss,
+			Name: topic,
+			Version: version,
+		},
+	}
+	ct := protocols.NewCodeMap(string(topic), version, 65535, nil)
+	run := func(p *protocols.Peer) error {
+		glog.V(logger.Detail).Infof("inside run with peer %v", p)
+		return nil
+	}
+	pt.NewProtocol(run, ct)
+	return pt
+}
+
+
 func TestPssTwoToSelf(t *testing.T) {
 	addr := RandomAddr()
 	pt := newPssTester(t, addr, 2)
@@ -27,6 +60,7 @@ func TestPssTwoToSelf(t *testing.T) {
 	if !found {
 		t.Fatalf("peerMsg not defined")
 	}
+
 	pssmsgcode, found := pt.ct.GetCode(&PssMsg{})
 	if !found {
 		t.Fatalf("PssMsg not defined")
