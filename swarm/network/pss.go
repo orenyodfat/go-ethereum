@@ -45,7 +45,8 @@ type PssMessenger struct {
 	Overlay
 	Topic PssTopic
 	Sender []byte
-	Recipient []byte
+	//Recipient []byte
+	RW PssReadWriter
 }
 
 func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
@@ -76,6 +77,12 @@ func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
 }
 
 func (pm *PssMessenger) ReadMsg() (p2p.Msg, error) {
+	select {
+		case msg := <-pm.RW.rw:
+			glog.V(logger.Warn).Infof("pssmsgr readmsg got %v", msg)
+			return msg, nil
+	}
+	
 	return p2p.Msg{}, nil
 }
 
@@ -85,6 +92,7 @@ func (pm *PssMessenger) Close() {
 
 type PssReadWriter struct {
 	Recipient []byte
+	rw chan p2p.Msg
 }
 
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
@@ -93,6 +101,10 @@ func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 
 func (prw PssReadWriter) WriteMsg(p2p.Msg) error {
 	return nil
+}
+
+func (prw *PssReadWriter) FwdMsg(msg p2p.Msg) {
+	prw.rw <- msg
 }
 
 type PssEnvelope struct {
@@ -105,15 +117,25 @@ type PssProtocol struct {
 	*Pss
 	Name string
 	Version uint
-	Peer Peer
+	Peer *protocols.Peer
 	VirtualProtocol *p2p.Protocol
 	ct *protocols.CodeMap
 }
 
-func (pp *PssProtocol) setPeer(p Peer) {
+func (pp *PssProtocol) setPeer(p *protocols.Peer) {
 	pp.Peer = p
 }
-/*
+
+
+// a new protocol is run using this signature:
+// func NewProtocol(protocolname string, protocolversion uint, run func(*Peer) error, na adapters.NodeAdapter, ct *CodeMap, peerInfo func(id discover.NodeID) interface{}, nodeInfo func() interface{}) *p2p.Protocol {
+// the run function is the extended run function to the protocol runnning on the peer, before which a new protocols.peer is created with the messenger passed in the nodeadapter passed in the constructor
+
+
+// the pssprotocol newprotocol function is a REPLACEMENT which implements the following adjustment:
+// * it uses the pssmessenger
+// we can override the messenger in the extended run function, provided the messenger is available in scope from the de
+
 func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocols.CodeMap) *p2p.Protocol {
 
 	r := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
@@ -132,14 +154,14 @@ func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocol
 		Run:      r,
 	}
 }
-*/
+
 //func (pp *PssProtocol) Messenger(rw p2p.MsgReadWriter) adapters.Messenger {
 func (pp *PssProtocol) Messenger(rw PssReadWriter) adapters.Messenger {
 	prw := rw
 	t := pp.MakeTopic(string(pp.Name))
 	pm := &PssMessenger{
 		Overlay: pp.Overlay,
-		Recipient: prw.Recipient,
+		RW: prw,
 		Sender: pp.LocalAddr,
 		Topic: t,
 	}
@@ -169,11 +191,12 @@ func (pp *PssProtocol) HandlePssMsg(msg interface{}) error {
 			glog.V(logger.Warn).Infof("pss payload data does not fit in interface %v (code %v): %v", pmsg, rmsg.Code, err)
 			return err
 		}
-		//size := uint8(env.Data[0])
-		//submsgtype := string(env.Data[1:size+1])
-		//submsg := env.Data[size+1:]
 		glog.V(logger.Detail).Infof("rlp decoded %v", pmsg)
-		//submsg := tmpDeserialize(, p.Codfe)
+		
+		// where to send the unpacked msg?
+		// best would be to have a protocols "peer" with a messenger that sends this to the channel where readmsg is read from
+		// and the peer would send back through "send"
+		
 		// resolve topic to protocol
 		// find messagetype from codemap
 		pp.C <- env

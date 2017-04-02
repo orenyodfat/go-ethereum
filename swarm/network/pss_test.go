@@ -8,7 +8,7 @@ import (
 	
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
-	//"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	//"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
@@ -58,12 +58,12 @@ func TestPssProtocolStart(t *testing.T) {
 		Data: makeFakeMsg(t, pt.ct),
 	}
 
-	rw := PssReadWriter{
+	/*rw := PssReadWriter{
 		Recipient: pt.Ids[len(pt.Ids) - 1].Bytes(),
 	}
 	m := pt.Messenger(rw)
 	glog.V(logger.Detail).Infof("made messenger %v", m)
-	
+	*/
 	subpeermsgcode, found := pt.ct.GetCode(&SubPeersMsg{})
 	if !found {
 		t.Fatalf("subpeersMsg not defined")
@@ -312,7 +312,6 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 
 	srv := func(p Peer) error {
 		p.Register(&PssMsg{}, psp.HandlePssMsg)
-		psp.setPeer(p)
 		psp.ct = ct
 		pp.Add(p)
 		p.DisconnectHook(func(err error) {
@@ -350,6 +349,8 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 }
 
 
+// sets up hive
+
 func newPssTester(t *testing.T, n int, addr *peerAddr) *pssTester {
 	psp, to, ct := newPssBaseTester(t, n, addr)
 	
@@ -384,6 +385,28 @@ func newPssTester(t *testing.T, n int, addr *peerAddr) *pssTester {
 		PssProtocol: psp,
 	}
 }
+
+// laddr (peerAddr) contains both underlying nodeid and the swarm overlay address of the PIVOT NODE
+
+// sets up codemap
+// sets up kademlia routing
+// sets up pss base object with;
+// * kademlia (for message forwarding)
+// * the swarm overlay addr: keccak256 hash of the discovery.nodeid, byte slice) 
+// instantiates the pssProtocol, which should be created one to one for every protocol wished to offer over pss
+// * dispatching of incoming messages
+// * messenger instantiation for 
+
+// the protocol is identified over pss as a topic and version pair, analogous to 
+// however this topic and version pair should be obfuscated, and a topic and version alias could be established through a handshake phase
+// ("handshake" being a topic in itself)
+// where the protocol name/version is asked for by the local peer in a public key encrypted message payload, and a topic/version is given by the pss-peer in return
+// through an active session the remote peer will remember this pairing, until
+// * termination notification is received by the pss-peer
+// * is flushed from the topic lookup table by new requests obsoleting the current one
+
+// so far, in this simple test case, the pssProtocol is only created for an imagined extended bzz protocol scenario
+// these should however be two protocols running, one for the pss/bzz, and one separate for the actual protocol whose implementation is desired
 
 func newPssBaseTester(t *testing.T, n int, laddr *peerAddr) (*PssProtocol, Overlay, *protocols.CodeMap) {
 	
@@ -431,36 +454,7 @@ func (pp *PssProtocol) SimpleHandlePssMsg(msg interface{}) error {
 	
 	return nil
 }
-/*
-func TestMakePssPeer(t *testing.T) {
-	
-	name := "foo"
-	version := uint(42)
-	
-	id := adapters.RandomNodeId()
-	addr := NewPeerAddrFromNodeId(id)
-	
-	pt, _, ct := newPssBaseTester(t, 0, addr)
-	
-	p := p2p.NewPeer(id.NodeID, "foo", []p2p.Cap{
-			p2p.Cap {
-				Name: name,
-				Version: version,
-			},
-		},
-	)
-	
-	rw := PssReadWriter{
-		Recipient: addr.UnderlayAddr(),
-	}
-	
-	m := pt.Messenger(rw)
-	
-	pp := protocols.NewPeer(p, ct, m)
-	
-	glog.V(logger.Detail).Infof("made psspeer %v\n\tid: %v\n\toaddr: %x,\n\tuaddr: %x", pp, id, addr.OverlayAddr(), addr.UnderlayAddr())
-}
-*/
+
 
 func makeFakeMsg(t *testing.T, ct *protocols.CodeMap) []byte {
 	
@@ -490,4 +484,61 @@ func makeFakeMsg(t *testing.T, ct *protocols.CodeMap) []byte {
 	}
 	
 	return rlpbundle
+}
+
+
+func TestMakePssPeer(t *testing.T) {
+	
+	topic := "foo"
+	version := uint(42)
+	
+	
+	id := adapters.RandomNodeId()
+	addr := NewPeerAddrFromNodeId(id)
+	
+	pid := adapters.RandomNodeId()
+	
+	pp, _, _ := newPssBaseTester(t, 1, addr)
+	
+	p := p2p.NewPeer(pid.NodeID, "foo", []p2p.Cap{
+			p2p.Cap {
+				Name: topic,
+				Version: version,
+			},
+		},
+	)
+	
+	rw := PssReadWriter{
+		Recipient: addr.UnderlayAddr(),
+		rw: make(chan p2p.Msg),
+	}
+	
+	run := func(p *protocols.Peer) error {
+		glog.V(logger.Detail).Infof("inside virtual run with peer %v", p)
+		//p.m = m
+		pp.setPeer(p)
+		go p.Run()
+		return nil
+	}
+	vct := protocols.NewCodeMap(topic, version, 65535, nil)
+	vct.Register(&pssTestPayload{}) 
+	
+	pp.VirtualProtocol = pp.NewProtocol(run, vct)
+
+	pp.VirtualProtocol.Run(p, rw)
+	
+	// fake a message send to the pipe
+	bmsg := makeFakeMsg(t, vct)
+	b := bytes.NewBuffer(bmsg)
+	glog.V(logger.Detail).Infof("protocoltester: %v", pp)
+		
+	msg := p2p.Msg{
+		Code: uint64(pp.VirtualProtocol.Length - 1),
+		Size: uint32(len(bmsg)),
+		Payload: b,
+		ReceivedAt: time.Now(),
+	}
+
+	rw.rw <- msg
+	close(rw.rw)
 }
