@@ -2,18 +2,19 @@ package network
 
 import (
 	"bytes"
-	"encoding/gob"
 	
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
 	DefaultTTL	= 6000
 	TopicLength = 32
+	TopicResolverLength = 8
 )
 
 type PssTopic [TopicLength]byte
@@ -23,14 +24,16 @@ type PssTopic [TopicLength]byte
 type Pss struct {
 	Overlay
 	LocalAddr	[]byte
-	C	chan PssEnvelope
+	C	chan interface{}
+	topics	map[PssTopic]string
 }
 
 func NewPss(k Overlay, addr []byte) *Pss {
 	return &Pss{
 		Overlay: k,
 		LocalAddr: addr,
-		C: make(chan PssEnvelope),
+		C: make(chan interface{}),
+		topics: make(map[PssTopic]string, TopicResolverLength),
 	}
 }
 
@@ -49,7 +52,7 @@ func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
 	// rlp encode msg
 
 	// wrap data 
-	pe := PssEnvelope{
+	/*pe := PssEnvelope{
 		Topic: pm.Topic,
 		TTL: DefaultTTL,
 		Data: tmpSerialize(msg),
@@ -68,7 +71,7 @@ func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
 			return true
 		}
 		return false
-	})
+	})*/
 	return nil
 }
 
@@ -100,10 +103,17 @@ type PssEnvelope struct {
 
 type PssProtocol struct {
 	*Pss
-	Name []byte
+	Name string
 	Version uint
+	Peer Peer
+	VirtualProtocol *p2p.Protocol
+	ct *protocols.CodeMap
 }
 
+func (pp *PssProtocol) setPeer(p Peer) {
+	pp.Peer = p
+}
+/*
 func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocols.CodeMap) *p2p.Protocol {
 
 	r := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
@@ -122,11 +132,11 @@ func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocol
 		Run:      r,
 	}
 }
-
+*/
 //func (pp *PssProtocol) Messenger(rw p2p.MsgReadWriter) adapters.Messenger {
 func (pp *PssProtocol) Messenger(rw PssReadWriter) adapters.Messenger {
 	prw := rw
-	t := makeTopic(pp.Name)
+	t := pp.MakeTopic(string(pp.Name))
 	pm := &PssMessenger{
 		Overlay: pp.Overlay,
 		Recipient: prw.Recipient,
@@ -136,26 +146,41 @@ func (pp *PssProtocol) Messenger(rw PssReadWriter) adapters.Messenger {
 	return adapters.Messenger(pm)
 }
 
-type PssMsg struct {
-	To   []byte
-	Data	PssEnvelope
-}
-
-func (pm *PssMsg) String() string {
-	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To)
-}
-
-func (ps *Pss) HandlePssMsg(msg interface{}) error {
+func (pp *PssProtocol) HandlePssMsg(msg interface{}) error {
+	rmsg := &pssPayload{}
 	pssmsg := msg.(*PssMsg)
 	to := pssmsg.To
 	env := pssmsg.Data
-	if ps.isSelfRecipient(to) {
-		glog.V(logger.Detail).Infof("Pss to us, yay!", to)
-		ps.C <- env
+	if pp.isSelfRecipient(to) {
+		glog.V(logger.Detail).Infof("pssmsg wcontent: %v", env.Data)
+		err := rlp.DecodeBytes(env.Data, rmsg)
+		if err != nil {
+			glog.V(logger.Warn).Infof("pss payload encapsulation is corrupt: %v", err)
+			return err
+		}
+		
+		pmsg, found := pp.ct.GetInterface(rmsg.Code)
+		if !found {
+			glog.V(logger.Warn).Infof("message code %v not recognized, discarding", rmsg.Code)
+			return err
+		}
+		err = rlp.DecodeBytes(rmsg.Data, &pmsg)
+		if err != nil {
+			glog.V(logger.Warn).Infof("pss payload data does not fit in interface %v (code %v): %v", pmsg, rmsg.Code, err)
+			return err
+		}
+		//size := uint8(env.Data[0])
+		//submsgtype := string(env.Data[1:size+1])
+		//submsg := env.Data[size+1:]
+		glog.V(logger.Detail).Infof("rlp decoded %v", pmsg)
+		//submsg := tmpDeserialize(, p.Codfe)
+		// resolve topic to protocol
+		// find messagetype from codemap
+		pp.C <- env
 		return nil
 	}
 	
-	ps.EachLivePeer(to, 255, func(p Peer, po int) bool {
+	pp.EachLivePeer(to, 255, func(p Peer, po int) bool {
 		err := p.Send(pssmsg)
 		
 		if err != nil {
@@ -167,6 +192,16 @@ func (ps *Pss) HandlePssMsg(msg interface{}) error {
 	return nil
 }
 
+type PssMsg struct {
+	To   []byte
+	Data	PssEnvelope
+}
+
+func (pm *PssMsg) String() string {
+	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To)
+}
+
+
 func (ps *Pss) isSelfRecipient(to []byte) bool {
 	if bytes.Equal(to, ps.LocalAddr) {
 		return true
@@ -175,20 +210,11 @@ func (ps *Pss) isSelfRecipient(to []byte) bool {
 }
 
 // if too long topic is sent will return only 0s, should be considered error
-func makeTopic(b []byte) PssTopic {
+func (ps *Pss) MakeTopic(s string) PssTopic {
 	t := [TopicLength]byte{}
-	if len(b) <= TopicLength {
-		copy(t[:len(b)], b[:len(b)])
+	if len(s) <= TopicLength {
+		copy(t[:len(s)], s)
 	}
+	ps.topics[t] = s
 	return t
-}
-
-func tmpSerialize(msg interface{}) []byte {
-	var smsg bytes.Buffer
-	enc := gob.NewEncoder(&smsg)
-	err := enc.Encode(msg)
-	if err != nil {
-		return []byte{}
-	}
-	return smsg.Bytes()
 }

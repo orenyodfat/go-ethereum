@@ -122,6 +122,13 @@ type CodeMap struct {
 	messages   map[reflect.Type]uint64 // index of types to codes, for sending by type
 }
 
+func (self *CodeMap) GetInterface(code uint64) (interface{}, bool) {
+	if int(code) > len(self.codes) - 1 {
+		return nil, false
+	}
+	return reflect.New(self.codes[code]), true
+}
+
 func (self *CodeMap) GetCode(msg interface{}) (uint64, bool) {
 	code, found := self.messages[reflect.TypeOf(msg)]
 	return code, found
@@ -225,6 +232,16 @@ func (self *Peer) Register(msg interface{}, handler func(interface{}) error) uin
 	log.Trace(fmt.Sprintf("register handle for %v", typ))
 	self.handlers[typ] = append(self.handlers[typ], handler)
 	return code
+}
+
+// gets the handler function for the message struct
+func (self *Peer) GetHandlers(msg interface{}) []func(interface{}) error {
+	typ := reflect.TypeOf(msg)
+	_, found := self.ct.messages[typ]
+	if !found {
+		panic(fmt.Sprintf("message type '%v' unknown ", typ))
+	}
+	return self.handlers[typ]
 }
 
 // Run starts the forever loop that handles incoming messages
