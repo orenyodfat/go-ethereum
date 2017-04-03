@@ -47,7 +47,7 @@ type Config struct {
 	*storage.ChunkerParams
 	*network.HiveParams
 	Swap *swap.SwapParams
-	//*network.SyncParams
+	*network.SyncParams
 	Path      string
 	Port      string
 	PublicKey string

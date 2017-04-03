@@ -65,7 +65,6 @@ type Peer interface {
 	Send(interface{}) error                               // can send messages
 	Drop(error)                                           // disconnect this peer
 	Register(interface{}, func(interface{}) error) uint64 // register message-handler callbacks
-	GetHandlers(interface{}) []func(interface{}) error
 	DisconnectHook(func(error))
 }
 
