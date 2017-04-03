@@ -29,7 +29,7 @@ type pssPayload struct {
 	ReceivedAt time.Time
 }
 
-type pssTestPayload struct {
+type PssTestPayload struct {
 	Data string
 }
 
@@ -124,6 +124,8 @@ func TestPssProtocolStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PssMsg sending %v to %v (pivot) fail: %v", pt.Ids[0], addr.OverlayAddr(), err)
 	}	
+	
+	time.Sleep(time.Second * 1)
 	
 }
 
@@ -310,6 +312,13 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 	
 	pp := NewHive(NewHiveParams(), to)
 
+	// now the pssprotocol Insert function designation is overwritten on every new peer connect
+	// we need a new pssprotocol for every peer connect, too
+	// or we need to use it as a dispatcher with a pool of rws/messengers to match the peer
+	// problem is, that we can't tell the peer from inside the msg handler function
+	// thus we need to instantiate and maintain (pss)peers with m/rws for every new pssmsg that comes in, with the "sender" field as the nodeid
+	// question again (and again and again) is how to we then reach the right messenger/rw to pass messages in to and out from this peer
+	
 	srv := func(p Peer) error {
 		p.Register(&PssMsg{}, psp.HandlePssMsg)
 		psp.ct = ct
@@ -320,17 +329,35 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 		return nil
 	}
 	
+	// I guess this is where the handler registering goes
+	// still to figure out is how to tap into and register
+	// the batches of handlers that are already registered on the existing p2p protocols
+	// 
+	run := func(p *protocols.Peer) error {
+		p.Register(&PssTestPayload{}, psp.SimpleHandlePssPayload)
+		glog.V(logger.Detail).Infof("inside virtual run with peer %v", p)
+		err := p.Run()
+		glog.V(logger.Detail).Infof("virtual run peer died: %v", err)
+		return nil
+	}
+	
+	psp.VirtualProtocol = psp.NewProtocol(run, ct)
+	psp.Name = topic
+	psp.Version = version
+	
 	protocall := func(na adapters.NodeAdapter) adapters.ProtoCall {
-		psp.VirtualProtocol = Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
-		return psp.VirtualProtocol.Run
+		protocol := Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
+		return func (p *p2p.Peer, rw p2p.MsgReadWriter) error {
+			prw := PssReadWriter{
+				rw: make(chan p2p.Msg),
+			}
+			go psp.VirtualProtocol.Run(p, prw)
+			protocol.Run(p, rw)
+			return nil
+		}
 	}
 
 	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), n, protocall)
-	
-	/*run := func(p *protocols.Peer) error {
-		glog.V(logger.Detail).Infof("inside virtual run with peer %v", p)
-		return nil
-	}*/
 	
 	pt := &pssProtocolTester{
 		pssTester: &pssTester{
@@ -340,11 +367,6 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 		},
 	}
 	
-	//vct := protocols.NewCodeMap(topic, version, 65535, nil)
-	//pt.VirtualProtocol = pt.NewProtocol(run, vct)
-	pt.Name = topic
-	pt.Version = version
-		
 	return pt
 }
 
@@ -417,9 +439,7 @@ func newPssBaseTester(t *testing.T, n int, laddr *peerAddr) (*PssProtocol, Overl
 	ct.Register(&peersMsg{})
 	ct.Register(&getPeersMsg{})
 	ct.Register(&SubPeersMsg{})
-	ct.Register(&pssTestPayload{}) 
-	
-	//simPipe := adapters.NewSimPipe
+	ct.Register(&PssTestPayload{}) 
 	
 	kp := NewKadParams()
 	kp.MinProxBinSize = 3
@@ -431,6 +451,101 @@ func newPssBaseTester(t *testing.T, n int, laddr *peerAddr) (*PssProtocol, Overl
 
 	return lpsp, lto, ct
 }
+
+
+func makeFakeMsg(t *testing.T, ct *protocols.CodeMap) []byte {
+	
+	code, found := ct.GetCode(&PssTestPayload{})
+	if !found {
+		t.Fatalf("pssTestPayload type not registered")
+	}
+	
+	data := PssTestPayload{
+		Data: "Bar",
+	}
+	
+	rlpdata,err := rlp.EncodeToBytes(data)
+	if err != nil {
+		t.Fatalf("rlp encoding of data fail: %v", err)
+	}
+	
+	smsg := &pssPayload{
+		Code: code,
+		Size: uint32(len(rlpdata)),
+		Data: rlpdata,
+	}
+	
+	rlpbundle, err := rlp.EncodeToBytes(smsg)
+	if err != nil {
+		t.Fatalf("rlp encoding of msg fail: %v", err)
+	}
+	
+	return rlpbundle
+}
+
+// hands-on exercise to clear up the relationship with messenger, rw,
+// how to create and start a stripped-down protocol manually, and how to invoke the peer incoming handle loop
+
+// see above for description of what the base tester sets up
+
+// currently we're using write directly to the rw as a hack
+
+func TestMakePssPeer(t *testing.T) {
+	
+	topic := "foo"
+	version := uint(42)
+	
+	id := adapters.RandomNodeId()
+	addr := NewPeerAddrFromNodeId(id)
+		
+	pp, _, _ := newPssBaseTester(t, 1, addr)
+	
+	// make a fake peer to run the protocol on
+	
+	pid := adapters.RandomNodeId()
+	p := p2p.NewPeer(pid.NodeID, "foo", []p2p.Cap{
+			p2p.Cap {
+				Name: topic,
+				Version: version,
+			},
+		},
+	)
+	
+	// the rw will secure two-way writing
+	rw := PssReadWriter{
+		Recipient: addr.UnderlayAddr(),
+		rw: make(chan p2p.Msg),
+	}
+	
+	run := func(p *protocols.Peer) error {
+		glog.V(logger.Detail).Infof("inside virtual run with peer %v", p)
+		go p.Run()
+		return nil
+	}
+	vct := protocols.NewCodeMap(topic, version, 65535, nil)
+	vct.Register(&PssTestPayload{}) 
+	
+	pp.VirtualProtocol = pp.NewProtocol(run, vct)
+
+	pp.VirtualProtocol.Run(p, rw)
+	
+	// fake a message send to the pipe
+	bmsg := makeFakeMsg(t, vct)
+	b := bytes.NewBuffer(bmsg)
+	glog.V(logger.Detail).Infof("protocoltester: %v", pp)
+		
+	msg := p2p.Msg{
+		Code: uint64(pp.VirtualProtocol.Length - 1),
+		Size: uint32(len(bmsg)),
+		Payload: b,
+		ReceivedAt: time.Now(),
+	}
+
+
+	rw.rw <- msg
+	close(rw.rw)
+}
+
 
 // poc for just passing empty pssmsg shells
 func (pp *PssProtocol) SimpleHandlePssMsg(msg interface{}) error {
@@ -455,90 +570,9 @@ func (pp *PssProtocol) SimpleHandlePssMsg(msg interface{}) error {
 	return nil
 }
 
-
-func makeFakeMsg(t *testing.T, ct *protocols.CodeMap) []byte {
-	
-	code, found := ct.GetCode(&pssTestPayload{})
-	if !found {
-		t.Fatalf("pssTestPayload type not registered")
-	}
-	
-	data := pssTestPayload{
-		Data: "Bar",
-	}
-	
-	rlpdata,err := rlp.EncodeToBytes(data)
-	if err != nil {
-		t.Fatalf("rlp encoding of data fail: %v", err)
-	}
-	
-	smsg := &pssPayload{
-		Code: code,
-		Size: uint32(len(rlpdata)),
-		Data: rlpdata,
-	}
-	
-	rlpbundle, err := rlp.EncodeToBytes(smsg)
-	if err != nil {
-		t.Fatalf("rlp encoding of msg fail: %v", err)
-	}
-	
-	return rlpbundle
-}
-
-
-func TestMakePssPeer(t *testing.T) {
-	
-	topic := "foo"
-	version := uint(42)
-	
-	
-	id := adapters.RandomNodeId()
-	addr := NewPeerAddrFromNodeId(id)
-	
-	pid := adapters.RandomNodeId()
-	
-	pp, _, _ := newPssBaseTester(t, 1, addr)
-	
-	p := p2p.NewPeer(pid.NodeID, "foo", []p2p.Cap{
-			p2p.Cap {
-				Name: topic,
-				Version: version,
-			},
-		},
-	)
-	
-	rw := PssReadWriter{
-		Recipient: addr.UnderlayAddr(),
-		rw: make(chan p2p.Msg),
-	}
-	
-	run := func(p *protocols.Peer) error {
-		glog.V(logger.Detail).Infof("inside virtual run with peer %v", p)
-		//p.m = m
-		pp.setPeer(p)
-		go p.Run()
-		return nil
-	}
-	vct := protocols.NewCodeMap(topic, version, 65535, nil)
-	vct.Register(&pssTestPayload{}) 
-	
-	pp.VirtualProtocol = pp.NewProtocol(run, vct)
-
-	pp.VirtualProtocol.Run(p, rw)
-	
-	// fake a message send to the pipe
-	bmsg := makeFakeMsg(t, vct)
-	b := bytes.NewBuffer(bmsg)
-	glog.V(logger.Detail).Infof("protocoltester: %v", pp)
-		
-	msg := p2p.Msg{
-		Code: uint64(pp.VirtualProtocol.Length - 1),
-		Size: uint32(len(bmsg)),
-		Payload: b,
-		ReceivedAt: time.Now(),
-	}
-
-	rw.rw <- msg
-	close(rw.rw)
+// poc for handling incoming unpacked message
+func (pp *PssProtocol) SimpleHandlePssPayload(msg interface{}) error {
+	pmsg := msg.(*PssTestPayload)
+	glog.V(logger.Detail).Infof("PssTestPayloadhandler got message %v", pmsg)
+	return nil
 }

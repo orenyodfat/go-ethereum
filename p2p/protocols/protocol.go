@@ -323,7 +323,7 @@ func (self *Peer) handleIncoming() (interface{}, error) {
 	log.Trace(fmt.Sprintf("<= %v", msg))
 	// make sure that the payload has been fully consumed
 	defer msg.Discard()
-
+	
 	if msg.Size > uint32(self.ct.MaxMsgSize) {
 		return nil, errorf(ErrMsgTooLong, "%v > %v", msg.Size, self.ct.MaxMsgSize)
 	}

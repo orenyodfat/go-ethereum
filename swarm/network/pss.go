@@ -3,7 +3,7 @@ package network
 import (
 	"bytes"
 	
-	"github.com/ethereum/go-ethereum/p2p/adapters"
+	//"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/logger"
@@ -37,19 +37,17 @@ func NewPss(k Overlay, addr []byte) *Pss {
 	}
 }
 
-// sender
-// packaged message
-// 
+// we have no access to this messenger from the outside
 
 type PssMessenger struct {
 	Overlay
 	Topic PssTopic
 	Sender []byte
 	//Recipient []byte
-	RW PssReadWriter
+	rw PssReadWriter
 }
 
-func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
+func (pm PssMessenger) SendMsg(code uint64, msg interface{}) error{
 	// rlp encode msg
 
 	// wrap data 
@@ -76,9 +74,9 @@ func (pm *PssMessenger) SendMsg(code uint64, msg interface{}) error{
 	return nil
 }
 
-func (pm *PssMessenger) ReadMsg() (p2p.Msg, error) {
+func (pm PssMessenger) ReadMsg() (p2p.Msg, error) {
 	select {
-		case msg := <-pm.RW.rw:
+		case msg := <-pm.rw.rw:
 			glog.V(logger.Warn).Infof("pssmsgr readmsg got %v", msg)
 			return msg, nil
 	}
@@ -86,9 +84,12 @@ func (pm *PssMessenger) ReadMsg() (p2p.Msg, error) {
 	return p2p.Msg{}, nil
 }
 
-func (pm *PssMessenger) Close() {
+func (pm PssMessenger) Close() {
 	return
 }
+
+// implements p2p.MsgReadWriter interface
+// this only specifices ReadMsg and WriteMsg (under the alias of MsgReader and MsgWriter)
 
 type PssReadWriter struct {
 	Recipient []byte
@@ -103,10 +104,6 @@ func (prw PssReadWriter) WriteMsg(p2p.Msg) error {
 	return nil
 }
 
-func (prw *PssReadWriter) FwdMsg(msg p2p.Msg) {
-	prw.rw <- msg
-}
-
 type PssEnvelope struct {
 	Topic PssTopic
 	TTL uint16
@@ -117,15 +114,19 @@ type PssProtocol struct {
 	*Pss
 	Name string
 	Version uint
-	Peer *protocols.Peer
 	VirtualProtocol *p2p.Protocol
 	ct *protocols.CodeMap
+	Insert func(p2p.Msg) error
 }
 
+/*
 func (pp *PssProtocol) setPeer(p *protocols.Peer) {
-	pp.Peer = p
+	//pp.Peer = p
+	pp.Peer = &PssPeer{
+		Peer: p,
+	}
 }
-
+*/
 
 // a new protocol is run using this signature:
 // func NewProtocol(protocolname string, protocolversion uint, run func(*Peer) error, na adapters.NodeAdapter, ct *CodeMap, peerInfo func(id discover.NodeID) interface{}, nodeInfo func() interface{}) *p2p.Protocol {
@@ -139,12 +140,16 @@ func (pp *PssProtocol) setPeer(p *protocols.Peer) {
 func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocols.CodeMap) *p2p.Protocol {
 
 	r := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-
-		m := pp.Messenger(rw.(PssReadWriter))
-
+		prw := rw.(PssReadWriter)
+		m := pp.Messenger(prw)
+		pp.Insert = func(msg p2p.Msg) error {
+			glog.V(logger.Detail).Infof("inside insert with msg %v", msg)
+			prw.rw <- msg
+			return nil
+		}
 		peer := protocols.NewPeer(p, ct, m)
+		
 		return run(peer)
-
 	}
 	
 	return &p2p.Protocol{
@@ -155,24 +160,28 @@ func (pp *PssProtocol) NewProtocol(run func(*protocols.Peer) error, ct *protocol
 	}
 }
 
-//func (pp *PssProtocol) Messenger(rw p2p.MsgReadWriter) adapters.Messenger {
-func (pp *PssProtocol) Messenger(rw PssReadWriter) adapters.Messenger {
+func (pp *PssProtocol) Messenger(rw PssReadWriter) PssMessenger {
+//func (pp *PssProtocol) Messenger(rw PssReadWriter) adapters.Messenger {
 	prw := rw
 	t := pp.MakeTopic(string(pp.Name))
-	pm := &PssMessenger{
+	pm := PssMessenger{
 		Overlay: pp.Overlay,
-		RW: prw,
+		rw: prw,
 		Sender: pp.LocalAddr,
 		Topic: t,
 	}
-	return adapters.Messenger(pm)
+	return pm
 }
 
 func (pp *PssProtocol) HandlePssMsg(msg interface{}) error {
+	
 	rmsg := &pssPayload{}
 	pssmsg := msg.(*PssMsg)
 	to := pssmsg.To
 	env := pssmsg.Data
+	
+	glog.V(logger.Detail).Infof("inside handlepssmsg")
+	
 	if pp.isSelfRecipient(to) {
 		glog.V(logger.Detail).Infof("pssmsg wcontent: %v", env.Data)
 		err := rlp.DecodeBytes(env.Data, rmsg)
@@ -181,6 +190,7 @@ func (pp *PssProtocol) HandlePssMsg(msg interface{}) error {
 			return err
 		}
 		
+		// to be ignored, just making sure things are sane while testing
 		pmsg, found := pp.ct.GetInterface(rmsg.Code)
 		if !found {
 			glog.V(logger.Warn).Infof("message code %v not recognized, discarding", rmsg.Code)
@@ -192,6 +202,20 @@ func (pp *PssProtocol) HandlePssMsg(msg interface{}) error {
 			return err
 		}
 		glog.V(logger.Detail).Infof("rlp decoded %v", pmsg)
+		// end ignore
+		
+		imsg := p2p.Msg{
+			Code: rmsg.Code,
+			Size: rmsg.Size,
+			ReceivedAt: rmsg.ReceivedAt,
+			Payload: bytes.NewBuffer(rmsg.Data),
+		}
+		
+		err = pp.Insert(imsg)
+		if err != nil {
+			glog.V(logger.Error).Infof("error injecting message %v: %v", imsg, err)
+			return err
+		}
 		
 		// where to send the unpacked msg?
 		// best would be to have a protocols "peer" with a messenger that sends this to the channel where readmsg is read from
