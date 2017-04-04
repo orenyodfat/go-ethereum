@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"time"
+	"reflect"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -87,28 +88,36 @@ type PssMessenger struct {
 
 func (pm PssMessenger) SendMsg(code uint64, msg interface{}) error {
 	// rlp encode msg
-
-	// wrap data
-	/*pe := PssEnvelope{
-		Topic: pm.Topic,
-		TTL: DefaultTTL,
-		Data: tmpSerialize(msg),
+	glog.V(logger.Detail).Infof("pss-sending msg code %v: %v", code, msg)
+	
+	rlpbundle, err := MakePss(code, pm.Sender, msg)
+	if err != nil {
+		return err
+	}
+	
+	pssenv := PssEnvelope{
+		Topic: MakeTopic("42"),
+		TTL:   DefaultTTL,
+		Data:  rlpbundle,
 	}
 
 	pssmsg := PssMsg{
-		To: pm.Recipient,
-		Data: pe,
+		To: pm.rw.Recipient,
+		Data: pssenv,
 	}
-
+	
 	// send with
-	pm.EachLivePeer(pm.Recipient, 255, func(p Peer, po int) bool {
-		err := p.Send(pssmsg)
+	pm.EachLivePeer(pm.rw.Recipient, 255, func(p Peer, po int) bool {
+		
+		err := p.Send(&pssmsg)
 
 		if err != nil {
+			glog.V(logger.Detail).Infof("err in iter: %v, have peer %v", err, reflect.TypeOf(p))
 			return true
 		}
 		return false
-	})*/
+	})
+	
 	return nil
 }
 
@@ -208,7 +217,7 @@ func (pp *PssProtocol) Add(p *p2p.Peer, rw PssReadWriter) error {
 
 func (pp *PssProtocol) Messenger(rw PssReadWriter) PssMessenger {
 	prw := rw
-	t := pp.MakeTopic(string(pp.Name))
+	t := MakeTopic(string(pp.Name))
 	pm := PssMessenger{
 		Overlay: pp.Overlay,
 		rw:      prw,
@@ -308,11 +317,41 @@ func (ps *Pss) isSelfRecipient(to []byte) bool {
 }
 
 // if too long topic is sent will return only 0s, should be considered error
-func (ps *PssProtocol) MakeTopic(s string) PssTopic {
+func MakeTopic(s string) PssTopic {
 	t := [TopicLength]byte{}
 	if len(s) <= TopicLength {
 		copy(t[:len(s)], s)
 	}
-	//ps.topics[t] = s
 	return t
+}
+
+func MakePss(code uint64, sender []byte, msg interface{}) ([]byte, error) {
+
+	/*code, found := pp.ct.GetCode(msg)
+	if !found {
+		return nil, Errorf("Msg code for msg type %v not registered", reflect.TypeOf(msg))
+	}*/
+
+	/*data := PssTestPayload{
+		Data: "Bar",
+	}*/
+
+	rlpdata, err := rlp.EncodeToBytes(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	smsg := &pssPayload{
+		Code:   code,
+		Size:   uint32(len(rlpdata)),
+		Data:   rlpdata,
+		Sender: sender,
+	}
+
+	rlpbundle, err := rlp.EncodeToBytes(smsg)
+	if err != nil {
+		return nil, err
+	}
+
+	return rlpbundle, nil
 }

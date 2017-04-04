@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"testing"
 	"time"
-	//"reflect"
+	"reflect"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
-	"github.com/ethereum/go-ethereum/p2p"
+	//"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	//"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func init() {
@@ -36,26 +35,20 @@ type pssProtocolTester struct {
 	//VirtualProtocol *p2p.Protocol
 }
 
-func TestPssProtocolStart(t *testing.T) {
+//func TestPssProtocolStart(t *testing.T) {
+func TestPssVirtualProtocolIO(t *testing.T) {
 
 	//var sdata []byte
 
 	addr := RandomAddr()
 	pt := newPssProtocolTester(t, 2, "foo", 42, addr)
-	glog.V(logger.Detail).Infof("made protocoltester %v", pt.Name)
 
 	payload := PssEnvelope{
-		Topic: pt.MakeTopic("42"),
+		Topic: MakeTopic("42"),
 		TTL:   DefaultTTL,
-		Data:  makeFakeMsg(t, pt.ct, pt.Ids[1].Bytes()),
+		Data:  makeFakeMsg(t, pt.pssTester, pt.Ids[1].Bytes()),
 	}
 
-	/*rw := PssReadWriter{
-		Recipient: pt.Ids[len(pt.Ids) - 1].Bytes(),
-	}
-	m := pt.Messenger(rw)
-	glog.V(logger.Detail).Infof("made messenger %v", m)
-	*/
 	subpeermsgcode, found := pt.ct.GetCode(&SubPeersMsg{})
 	if !found {
 		t.Fatalf("subpeersMsg not defined")
@@ -99,6 +92,8 @@ func TestPssProtocolStart(t *testing.T) {
 		}
 	}
 
+	addr_sim := NewPeerAddrFromNodeId(pt.Ids[1])
+
 	err := pt.TestExchanges(
 		p2ptest.Exchange{
 			Triggers: []p2ptest.Trigger{
@@ -106,6 +101,16 @@ func TestPssProtocolStart(t *testing.T) {
 					Code: pssmsgcode,
 					Msg: &PssMsg{
 						To:   addr.OverlayAddr(),
+						Data: payload,
+					},
+					Peer: pt.Ids[0],
+				},
+			},
+			Expects: []p2ptest.Expect{
+				p2ptest.Expect{
+					Code: pssmsgcode,
+					Msg:  &PssMsg{
+						To:   addr_sim.OverlayAddr(),
 						Data: payload,
 					},
 					Peer: pt.Ids[0],
@@ -128,9 +133,9 @@ func TestPssTwoToSelf(t *testing.T) {
 	pt := newPssTester(t, 2, addr)
 
 	payload := PssEnvelope{
-		Topic: pt.MakeTopic("42"),
+		Topic: MakeTopic("42"),
 		TTL:   DefaultTTL,
-		Data:  makeFakeMsg(t, pt.ct, pt.Ids[1].Bytes()),
+		Data:  makeFakeMsg(t, pt, pt.Ids[1].Bytes()),
 	}
 
 	subpeermsgcode, found := pt.ct.GetCode(&SubPeersMsg{})
@@ -228,9 +233,9 @@ func TestPssTwoRelaySelf(t *testing.T) {
 	}
 
 	payload := PssEnvelope{
-		Topic: pt.MakeTopic("42"),
+		Topic: MakeTopic("42"),
 		TTL:   DefaultTTL,
-		Data:  makeFakeMsg(t, pt.ct, pt.Ids[1].Bytes()),
+		Data:  makeFakeMsg(t, pt, pt.Ids[1].Bytes()),
 	}
 
 	hs_pivot := correctBzzHandshake(addr)
@@ -306,7 +311,7 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 
 	run := func(p *PssPeer) error {
 		glog.V(logger.Detail).Infof("added and using psspeer: %v", p)
-		p.Register(&PssTestPayload{}, ps.SimpleHandlePssPayload)
+		p.Register(&PssTestPayload{}, p.SimpleHandlePssPayload)
 		err := p.Run()
 		glog.V(logger.Detail).Infof("psspeer died: %v", err)
 		return nil
@@ -315,6 +320,7 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 	pp := NewPssProtocol(ps, topic, version, run, ct)
 
 	srv := func(p Peer) error {
+		glog.V(logger.Detail).Infof("Peer %v has protocol map %v", reflect.TypeOf(p))
 		p.Register(&PssMsg{}, pp.handlePss)
 		h.Add(p)
 		p.DisconnectHook(func(err error) {
@@ -325,10 +331,7 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 
 	protocall := func(na adapters.NodeAdapter) adapters.ProtoCall {
 		protocol := Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
-		return func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-			protocol.Run(p, rw)
-			return nil
-		}
+		return protocol.Run
 	}
 
 	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), n, protocall)
@@ -357,13 +360,6 @@ func newPssTester(t *testing.T, n int, addr *peerAddr) *pssTester {
 	}
 
 	psp := NewPssProtocol(ps, topic, version, run, ct)
-
-	/*net := simulations.NewNetwork(&simulations.NetworkConfig{})
-	naf := func(conf *simulations.NodeConfig) adapters.NodeAdapter {
-		na := adapters.NewSimNode(conf.Id, net, simPipe)
-		return na
-	}
-	net.SetNaf(naf)*/
 
 	srv := func(p Peer) error {
 		p.Register(&PssMsg{}, ps.SimpleHandlePssMsg)
@@ -407,9 +403,9 @@ func newPssBaseTester(t *testing.T, topic string, version uint, n int, laddr *pe
 	return lps, ct
 }
 
-func makeFakeMsg(t *testing.T, ct *protocols.CodeMap, sender []byte) []byte {
-
-	code, found := ct.GetCode(&PssTestPayload{})
+func makeFakeMsg(t *testing.T, pt *pssTester, sender []byte) []byte {
+	
+	code, found := pt.ct.GetCode(&PssTestPayload{})
 	if !found {
 		t.Fatalf("pssTestPayload type not registered")
 	}
@@ -417,7 +413,12 @@ func makeFakeMsg(t *testing.T, ct *protocols.CodeMap, sender []byte) []byte {
 	data := PssTestPayload{
 		Data: "Bar",
 	}
-
+	
+	rlpbundle, err := MakePss(code, sender, data)
+	if err != nil {
+		return nil
+	}
+/*
 	rlpdata, err := rlp.EncodeToBytes(data)
 	if err != nil {
 		t.Fatalf("rlp encoding of data fail: %v", err)
@@ -434,7 +435,7 @@ func makeFakeMsg(t *testing.T, ct *protocols.CodeMap, sender []byte) []byte {
 	if err != nil {
 		t.Fatalf("rlp encoding of msg fail: %v", err)
 	}
-
+*/
 	return rlpbundle
 }
 
@@ -462,8 +463,9 @@ func (pp *Pss) SimpleHandlePssMsg(msg interface{}) error {
 }
 
 // poc for handling incoming unpacked message
-func (pp *Pss) SimpleHandlePssPayload(msg interface{}) error {
+func (p *PssPeer) SimpleHandlePssPayload(msg interface{}) error {
 	pmsg := msg.(*PssTestPayload)
 	glog.V(logger.Detail).Infof("PssTestPayloadhandler got message %v", pmsg)
+	p.Send(pmsg)
 	return nil
 }
