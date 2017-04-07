@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"time"
-	"reflect"
+	//"reflect"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/pot"
 )
 
 const (
@@ -21,8 +22,28 @@ const (
 	PssPeerCapacity     = 256
 )
 
+var (
+	zeroRW	= PssReadWriter{}
+)
+
+type PssMsg struct {
+	To   []byte
+	Data PssEnvelope
+}
+
+func (pm *PssMsg) String() string {
+	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To)
+}
+
+type PssEnvelope struct {
+	Topic PssTopic
+	TTL   uint16
+	Data  []byte
+}
+
 type pssPayload struct {
-	Sender     []byte
+	SenderOAddr	[]byte
+	SenderUAddr []byte
 	Code       uint64
 	Size       uint32
 	Data       []byte
@@ -31,6 +52,7 @@ type pssPayload struct {
 
 type PssTopic [TopicLength]byte
 
+/*
 type PssPeer struct {
 	*protocols.Peer
 	lastActive time.Time
@@ -45,52 +67,43 @@ func (psp *PssPeer) Insert(msg p2p.Msg) error {
 	psp.insertw <- msg
 	return nil
 }
+*/
 
-// The pss part encapuslates the kademlia for routing of messages, and the protocol peer address of the node we are operating on
-// the C channel is used to pass back received message content from the pssmsg handler
+// Pss singleton object provides:
+// - access to the swarm overlay and routing (kademlia)
+// - a collection of remote overlay addresses mapped to MsgReadWriters, representing the virtually connected peers
+// - a method to send a message to specific overlayaddr
 type Pss struct {
-	Overlay
-	LocalAddr []byte
-	C         chan interface{}
-	//topics	map[PssTopic]string
-	PeerPool map[adapters.NodeId]PssPeer
+	Overlay // we can get the overlayaddress from this
+	NodeId *adapters.NodeId // we need the underlayaddr to make virtual p2p.Peers in the receiving end
+	PeerPool map[pot.Address]PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 }
 
-func (ps *Pss) isActive(id adapters.NodeId) bool {
-	zeropsspeer := PssPeer{}
-	if ps.PeerPool[id] == zeropsspeer {
+func (ps *Pss) isActive(addr pot.Address) bool {
+	if ps.PeerPool[addr] == zeroRW {
 		return false
 	}
 	return true
 }
-
+/*
 func (ps *Pss) GetPssPeer(id adapters.NodeId) PssPeer {
 	return ps.PeerPool[id]
 }
-
-func NewPss(k Overlay, addr []byte) *Pss {
+*/
+func NewPss(k Overlay, id *adapters.NodeId) *Pss {
 	return &Pss{
 		Overlay:   k,
-		LocalAddr: addr,
-		C:         make(chan interface{}),
-		//topics: make(map[PssTopic]string, TopicResolverLength),
-		PeerPool: make(map[adapters.NodeId]PssPeer, PssPeerCapacity),
+		NodeId: id,
+		PeerPool: make(map[pot.Address]PssReadWriter, PssPeerCapacity),
 	}
 }
 
-type PssMessenger struct {
-	Overlay
-	Topic  PssTopic
-	Sender []byte
-	//Recipient []byte
-	rw PssReadWriter
-}
-
-func (pm PssMessenger) SendMsg(code uint64, msg interface{}) error {
+func (ps *Pss) Send(to []byte, code uint64, msg interface{}) error {
 	// rlp encode msg
+	sent := false
 	glog.V(logger.Detail).Infof("pss-sending msg code %v: %v", code, msg)
 	
-	rlpbundle, err := MakePss(code, pm.Sender, msg)
+	rlpbundle, err := ps.MakeMsg(code, msg)
 	if err != nil {
 		return err
 	}
@@ -102,56 +115,48 @@ func (pm PssMessenger) SendMsg(code uint64, msg interface{}) error {
 	}
 
 	pssmsg := PssMsg{
-		To: pm.rw.Recipient,
+		To: to,
 		Data: pssenv,
 	}
 	
-	// send with
-	pm.EachLivePeer(pm.rw.Recipient, 255, func(p Peer, po int) bool {
+	// send with kademlia
+	// find the closest peer to the recipient and attempt to send
+	ps.Overlay.EachLivePeer(to, 255, func(p Peer, po int) bool {
 		
 		err := p.Send(&pssmsg)
-
 		if err != nil {
-			glog.V(logger.Detail).Infof("err in iter: %v, have peer %v", err, reflect.TypeOf(p))
 			return true
 		}
+		sent = true
 		return false
 	})
-	
+	if !sent {
+		return fmt.Errorf("Was not able to send to any peers")
+	}
 	return nil
 }
 
-func (pm PssMessenger) ReadMsg() (p2p.Msg, error) {
-	select {
-	case msg := <-pm.rw.rw:
-		glog.V(logger.Warn).Infof("pssmsgr readmsg got %v", msg)
-		return msg, nil
-	}
-
-	return p2p.Msg{}, nil
-}
-
-func (pm PssMessenger) Close() {
-	return
-}
-
 type PssReadWriter struct {
-	Recipient []byte
+	Recipient pot.Address
+	LastActive time.Time
 	rw        chan p2p.Msg
 }
 
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
-	return p2p.Msg{}, nil
+	msg := <-prw.rw
+	glog.V(logger.Warn).Infof("got %v", msg)
+	return msg, nil
 }
 
-func (prw PssReadWriter) WriteMsg(p2p.Msg) error {
+func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
+	prw.rw <- msg
 	return nil
 }
 
-type PssEnvelope struct {
-	Topic PssTopic
-	TTL   uint16
-	Data  []byte
+func (prw PssReadWriter) InjectMsg(msg p2p.Msg) error {
+	glog.V(logger.Warn).Infof("inject %v on rw %v", msg, prw.rw)
+	prw.rw <- msg
+	return nil
 }
 
 type PssProtocol struct {
@@ -160,7 +165,6 @@ type PssProtocol struct {
 	Version         uint
 	VirtualProtocol *p2p.Protocol
 	ct              *protocols.CodeMap
-	Insert          func(p2p.Msg) error
 }
 
 // a new protocol is run using this signature:
@@ -170,7 +174,7 @@ type PssProtocol struct {
 // the pssprotocol newprotocol function is a REPLACEMENT which implements the following adjustment:
 // * it uses the pssmessenger
 
-func NewPssProtocol(pss *Pss, topic string, version uint, run func(*PssPeer) error, ct *protocols.CodeMap) *PssProtocol {
+func NewPssProtocol(pss *Pss, topic string, version uint, run func(*p2p.VirtualPeer) error, ct *protocols.CodeMap) *PssProtocol {
 	pp := &PssProtocol{
 		Pss:     pss,
 		Name:    topic,
@@ -179,15 +183,13 @@ func NewPssProtocol(pss *Pss, topic string, version uint, run func(*PssPeer) err
 	}
 
 	r := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-		prw := rw.(PssReadWriter)
-		prw.rw = make(chan p2p.Msg)
-		id := adapters.NodeId{
-			NodeID: p.ID(),
+		cap := p2p.Cap{
+			Name: topic,
+			Version: version,
 		}
-		pp.Add(p, prw)
-		peer := pss.PeerPool[id]
-
-		return run(&peer)
+		v := p2p.NewVirtualPeer(p, rw, cap)
+		run(v)
+		return nil
 	}
 
 	pp.VirtualProtocol = &p2p.Protocol{
@@ -200,31 +202,17 @@ func NewPssProtocol(pss *Pss, topic string, version uint, run func(*PssPeer) err
 	return pp
 }
 
-func (pp *PssProtocol) Add(p *p2p.Peer, rw PssReadWriter) error {
-	zeropsspeer := PssPeer{}
-	id := adapters.NodeId{
-		NodeID: p.ID(),
+func (ps *Pss) Add(id pot.Address, rw PssReadWriter) error {
+	if ps.PeerPool[id] != zeroRW {
+		return fmt.Errorf("Peer pss entry '%v' already exists", id)
 	}
-	// what is the zero value of psspeer?
-	if pp.PeerPool[id] == zeropsspeer {
-		pp.PeerPool[id] = PssPeer{
-			Peer:    protocols.NewPeer(p, pp.ct, pp.Messenger(rw)),
-			insertw: rw.rw,
-		}
-	}
+	ps.PeerPool[id] = rw
 	return nil
 }
 
-func (pp *PssProtocol) Messenger(rw PssReadWriter) PssMessenger {
-	prw := rw
-	t := MakeTopic(string(pp.Name))
-	pm := PssMessenger{
-		Overlay: pp.Overlay,
-		rw:      prw,
-		Sender:  pp.LocalAddr,
-		Topic:   t,
-	}
-	return pm
+func (ps *Pss) Remove(id pot.Address) {
+	ps.PeerPool[id] = zeroRW
+	return
 }
 
 func (pp *PssProtocol) handlePss(msg interface{}) error {
@@ -233,7 +221,7 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 	to := pssmsg.To
 	env := pssmsg.Data
 
-	glog.V(logger.Detail).Infof("pss for us, yay! ...: %v", rmsg)
+	glog.V(logger.Detail).Infof("pss for us, yay! ...: %v", pssmsg)
 
 	//if pp.isSelfRecipient(to) {
 	if to != nil {
@@ -242,19 +230,26 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 			glog.V(logger.Warn).Infof("pss payload encapsulation is corrupt: %v", err)
 			return err
 		}
-		sender := rmsg.Sender
-		nid := adapters.NewNodeId(sender)
+	
+		nid := adapters.NewNodeId(rmsg.SenderUAddr)
+		oaddrhash := pot.NewHashAddressFromBytes(rmsg.SenderOAddr)
 
-		if !pp.isActive(*nid) {
+		if !pp.isActive(oaddrhash.Address) {
 			rw := PssReadWriter{
-				Recipient: sender,
+				Recipient: oaddrhash.Address,
 				rw:        make(chan p2p.Msg),
 			}
 			p := p2p.NewPeer(nid.NodeID, "foo", []p2p.Cap{})
 
 			// might need to have a channel to check if everything is set up properly
 			// fake it here with a small wait
-			go pp.VirtualProtocol.Run(p, rw)
+			go func() {
+				pp.Add(oaddrhash.Address, rw)
+				pp.VirtualProtocol.Run(p, rw)
+				pp.Remove(oaddrhash.Address)
+				close(rw.rw)
+				return
+			}()
 			time.Sleep(time.Millisecond * 250)
 		}
 
@@ -278,9 +273,8 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 			ReceivedAt: rmsg.ReceivedAt,
 			Payload:    bytes.NewBuffer(rmsg.Data),
 		}
-
-		psp := pp.GetPssPeer(*nid)
-		psp.Insert(imsg)
+		
+		pp.PeerPool[oaddrhash.Address].InjectMsg(imsg)
 
 	} else {
 		pp.EachLivePeer(to, 255, func(p Peer, po int) bool {
@@ -293,24 +287,12 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 		})
 	}
 
-	// a small breather here too for demo purpose of current state being make sure the message gets inserted
-	time.Sleep(time.Millisecond * 250)
-	pp.C <- msg
 	return nil
 }
 
-type PssMsg struct {
-	To   []byte
-	Data PssEnvelope
-}
-
-func (pm *PssMsg) String() string {
-	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To)
-}
-
 func (ps *Pss) isSelfRecipient(to []byte) bool {
-	glog.V(logger.Detail).Infof("comparing to %v to localaddr %v", to, ps.LocalAddr)
-	if bytes.Equal(to, ps.LocalAddr) {
+	glog.V(logger.Detail).Infof("comparing to %v to localaddr %v", to, ps.GetAddr())
+	if bytes.Equal(to, ps.GetAddr()) {
 		return true
 	}
 	return false
@@ -325,7 +307,7 @@ func MakeTopic(s string) PssTopic {
 	return t
 }
 
-func MakePss(code uint64, sender []byte, msg interface{}) ([]byte, error) {
+func (ps *Pss) MakeMsg(code uint64, msg interface{}) ([]byte, error) {
 
 	/*code, found := pp.ct.GetCode(msg)
 	if !found {
@@ -341,11 +323,15 @@ func MakePss(code uint64, sender []byte, msg interface{}) ([]byte, error) {
 		return nil, err
 	}
 
+	// previous attempts corrupted nested structs in the payload iself upon deserializing
+	// therefore we use two separate []byte fields instead of peerAddr
+	// TODO verify that nested structs cannot be used in rlp
 	smsg := &pssPayload{
 		Code:   code,
 		Size:   uint32(len(rlpdata)),
 		Data:   rlpdata,
-		Sender: sender,
+		SenderOAddr: ps.GetAddr(),
+		SenderUAddr: ps.NodeId.NodeID[:],
 	}
 
 	rlpbundle, err := rlp.EncodeToBytes(smsg)

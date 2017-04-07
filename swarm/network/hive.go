@@ -50,6 +50,7 @@ type Overlay interface {
 	SuggestPeer() (PeerAddr, int, bool)
 
 	String() string
+	GetAddr() []byte
 }
 
 // Hive implements the PeerPool interface
