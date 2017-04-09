@@ -23,6 +23,12 @@ func init() {
 	glog.SetToStderr(true)
 }
 
+type PssTestPeer struct {
+	*protocols.Peer
+/*	lastActive time.Time
+	insertw    chan p2p.Msg*/
+}
+
 type PssTestPayload struct {
 	Data string
 }
@@ -30,6 +36,7 @@ type PssTestPayload struct {
 type pssTester struct {
 	*p2ptest.ProtocolTester
 	ct *protocols.CodeMap
+	vct *protocols.CodeMap
 	*PssProtocol
 }
 
@@ -46,10 +53,14 @@ func TestPssVirtualProtocolIO(t *testing.T) {
 	addr := RandomAddr()
 	pt := newPssProtocolTester(t, 2, "foo", 42, addr)
 
+	msg := makeFakeMsg(t, pt.pssTester, pt.Ids[1].Bytes())
+	//msg, _ := pt.MakeMsg(0, &bzzHandshake{0, 322, addr})
+
+	
 	payload := PssEnvelope{
 		Topic: MakeTopic("42"),
 		TTL:   DefaultTTL,
-		Data:  makeFakeMsg(t, pt.pssTester, pt.Ids[1].Bytes()),
+		Data:  msg,
 	}
 
 	subpeermsgcode, found := pt.ct.GetCode(&SubPeersMsg{})
@@ -124,8 +135,6 @@ func TestPssVirtualProtocolIO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PssMsg sending %v to %v (pivot) fail: %v", pt.Ids[0], addr.OverlayAddr(), err)
 	}
-	
-	time.Sleep(time.Millisecond * 1000)
 }
 
 // simple tests of merely receiving and relaying a skeleton pss msg
@@ -201,7 +210,7 @@ func TestPssTwoToSelf(t *testing.T) {
 		t.Fatalf("PssMsg sending %v to %v (pivot) fail: %v", pt.Ids[0], addr.OverlayAddr(), err)
 	}
 
-	alarm := time.NewTimer(1000 * time.Millisecond)
+	alarm := time.NewTimer(time.Second * 2)
 	select {
 	/*case data := <-pt.C:
 		//p := payload.Data.(pssTestPayload)
@@ -307,24 +316,17 @@ func TestPssTwoRelaySelf(t *testing.T) {
 
 func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr *peerAddr) *pssProtocolTester {
 
-	var realprotocol *p2p.Protocol 
-	var virtualprotocol *PssProtocol
+	//var realprotocol *p2p.Protocol 
+	var pssprotocol *PssProtocol
+	var vprotocol *p2p.Protocol
 	
-	ps, ct := newPssBaseTester(t, topic, version, n, addr)
-
+	ps, ct, vct := newPssBaseTester(t, topic, version, n, addr)
+			
 	h := NewHive(NewHiveParams(), ps.Overlay)
-
-	/*run := func(p *protocols.Peer) error {
-		glog.V(logger.Detail).Infof("added and using psspeer: %v", p)
-		p.Register(&PssTestPayload{}, p.SimpleHandlePssPayload)
-		err := p.Run()
-		glog.V(logger.Detail).Infof("psspeer died: %v", err)
-		return nil
-	}*/
 
 	srv := func(p Peer) error {
 		glog.V(logger.Detail).Infof("Peer %v has protocol map %v", reflect.TypeOf(p))
-		p.Register(&PssMsg{}, virtualprotocol.handlePss)
+		p.Register(&PssMsg{}, pssprotocol.handlePss)
 		h.Add(p)
 		p.DisconnectHook(func(err error) {
 			h.Remove(p)
@@ -333,30 +335,61 @@ func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr 
 	}
 
 	protocall := func(na adapters.NodeAdapter) adapters.ProtoCall {
-		realprotocol = Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
-		return realprotocol.Run
+		//realprotocol = Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
+		//return realprotocol.Run
+		protocol := Bzz(addr.OverlayAddr(), na, ct, srv, nil, nil)
+		return protocol.Run
 	}
 
 	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), n, protocall)
 	
-	run := func(p *p2p.VirtualPeer) error {
-		//glog.V(logger.Detail).Infof("added virtualprotocol peer: %v rw %v", p, rw.rw)
-		//protop := protocols.NewPeer(p, ct, )
-		//p.Register(&PssTestPayload{}, p.SimpleHandlePssPayload)
-		p.LinkProtocols([]p2p.Protocol{*realprotocol})
-		err := p.Run()
+	run := func(vp *p2p.VirtualPeer) error {
+		
+		// Detour to make a messenger with the ProtoRW for the virtual protocol, to enable the p2p.Peer:handle() method to send to the ProtoRW.in channel
+		//nastysimnodehack := adapters.NewSimNode(ps.NodeId, nil, func (rw p2p.MsgReadWriter) adapters.Messenger { return adapters.NewSimPipe(vp.GetProtoReadWriter(topic)) })
+		m := &PssMessenger{
+			RecipientUAddr: adapters.NodeId{
+				NodeID: vp.ID(),
+			},
+			send: ps.Send,
+			peerLookup: ps.GetPeerFromNodeId,
+		}
+		nastysimnodehack := adapters.NewSimNode(ps.NodeId, nil, func (rw p2p.MsgReadWriter) adapters.Messenger {
+			m.rw = vp.GetProtoReadWriter(topic)
+			return m
+		})
+	
+		vrun := func(p *protocols.Peer) error {	
+			glog.V(logger.Detail).Infof("running vprotocol: %v", p)
+			// this struct is for returning messages through writemsg only
+			// p2p/protocols.Send -> adapters.Messenger.SendMsg -> p2p.Send -> rw.WriteMsg()
+			// we need the rw to be the PssReadWriter, which will then pass it on to Pss.Send()
+			ptp := &PssTestPeer{
+				Peer: p,
+			}
+			p.Register(&PssTestPayload{}, ptp.SimpleHandlePssPayload)
+			err := p.Run()
+			return err
+		}
+
+		vprotocol = protocols.NewProtocol(topic, version, vrun, nastysimnodehack, vct, nil, nil)
+	
+		vp.LinkProtocols([]p2p.Protocol{*vprotocol})
+		err := vp.Run()
+		
 		glog.V(logger.Detail).Infof("virtualprotocol peer died: %v", err)
 		return nil
 	}
 
-	virtualprotocol = NewPssProtocol(ps, topic, version, run, ct)
+	pssprotocol = NewPssProtocol(ps, topic, version, run, ct)
 
 
 	pt := &pssProtocolTester{
 		pssTester: &pssTester{
 			ProtocolTester: ptt,
 			ct:             ct,
-			PssProtocol:    virtualprotocol,
+			vct:			vct,
+			PssProtocol:    pssprotocol,
 		},
 	}
 
@@ -367,7 +400,7 @@ func newPssTester(t *testing.T, n int, addr *peerAddr) *pssTester {
 
 	topic := "foo"
 	version := uint(42)
-	ps, ct := newPssBaseTester(t, topic, version, n, addr)
+	ps, ct, vct := newPssBaseTester(t, topic, version, n, addr)
 
 	pp := NewHive(NewHiveParams(), ps.Overlay)
 
@@ -396,14 +429,18 @@ func newPssTester(t *testing.T, n int, addr *peerAddr) *pssTester {
 	return &pssTester{
 		ProtocolTester: ptt,
 		ct:             ct,
+		vct:			vct,
 		PssProtocol:    psp,
 	}
 }
 
-func newPssBaseTester(t *testing.T, topic string, version uint, n int, laddr *peerAddr) (*Pss, *protocols.CodeMap) {
+func newPssBaseTester(t *testing.T, topic string, version uint, n int, laddr *peerAddr) (*Pss, *protocols.CodeMap, *protocols.CodeMap) {
 
 	var lto Overlay
 	var lps *Pss
+	
+	vct := protocols.NewCodeMap(topic, version, 65535, &PssTestPayload{})
+	
 	ct := BzzCodeMap()
 	ct.Register(&PssMsg{})
 	ct.Register(&peersMsg{})
@@ -419,12 +456,12 @@ func newPssBaseTester(t *testing.T, topic string, version uint, n int, laddr *pe
 	lto = NewKademlia(laddr.UnderlayAddr(), kp)
 	lps = NewPss(lto, nid)
 
-	return lps, ct
+	return lps, ct, vct
 }
 
 func makeFakeMsg(t *testing.T, pt *pssTester, sender []byte) []byte {
 	
-	code, found := pt.ct.GetCode(&PssTestPayload{})
+	code, found := pt.vct.GetCode(&PssTestPayload{})
 	if !found {
 		t.Fatalf("pssTestPayload type not registered")
 	}
@@ -494,7 +531,7 @@ func TestPipeTransport(t *testing.T) {
 	oaddrhash := pot.NewHashAddressFromBytes(addr.OverlayAddr())
 	
 	rw := PssReadWriter{
-		Recipient: oaddrhash.Address,
+		RecipientOAddr: oaddrhash.Address,
 		rw:        make(chan p2p.Msg),
 	}
 	
@@ -526,10 +563,11 @@ func TestPipeTransport(t *testing.T) {
 
 
 // poc for handling incoming unpacked message
-/*
-func (ps *Pss) SimpleHandlePssPayload(msg interface{}) error {
+
+//func (ps *Pss) SimpleHandlePssPayload(msg interface{}) error {
+func (ptp *PssTestPeer) SimpleHandlePssPayload(msg interface{}) error {
 	pmsg := msg.(*PssTestPayload)
 	glog.V(logger.Detail).Infof("PssTestPayloadhandler got message %v", pmsg)
-	ps.Send(pmsg)
+	ptp.Send(pmsg)
 	return nil
-}*/
+}

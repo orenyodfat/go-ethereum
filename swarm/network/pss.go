@@ -26,6 +26,7 @@ var (
 	zeroRW	= PssReadWriter{}
 )
 
+
 type PssMsg struct {
 	To   []byte
 	Data PssEnvelope
@@ -53,12 +54,6 @@ type pssPayload struct {
 type PssTopic [TopicLength]byte
 
 /*
-type PssPeer struct {
-	*protocols.Peer
-	lastActive time.Time
-	insertw    chan p2p.Msg
-}
-
 func (psp *PssPeer) Insert(msg p2p.Msg) error {
 	glog.V(logger.Detail).Infof("Injecting msg %v from %v", msg, psp)
 	// forever, forever we meet the same dead end
@@ -77,6 +72,30 @@ type Pss struct {
 	Overlay // we can get the overlayaddress from this
 	NodeId *adapters.NodeId // we need the underlayaddr to make virtual p2p.Peers in the receiving end
 	PeerPool map[pot.Address]PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
+	PeerReverse map[adapters.NodeId]pot.Address // keep track of all virtual p2p.Peers we are currently speaking to
+}
+
+func NewPss(k Overlay, id *adapters.NodeId) *Pss {
+	return &Pss{
+		Overlay:   k,
+		NodeId: id,
+		PeerPool: make(map[pot.Address]PssReadWriter, PssPeerCapacity),
+		PeerReverse: make(map[adapters.NodeId]pot.Address, PssPeerCapacity),
+	}
+}
+
+func (ps *Pss) Add(id pot.Address, rw PssReadWriter, nid *adapters.NodeId) error {
+	if ps.PeerPool[id] != zeroRW {
+		return fmt.Errorf("Peer pss entry '%v' already exists", id)
+	}
+	ps.PeerPool[id] = rw
+	ps.PeerReverse[*nid] = id
+	return nil
+}
+
+func (ps *Pss) Remove(id pot.Address) {
+	ps.PeerPool[id] = zeroRW
+	return
 }
 
 func (ps *Pss) isActive(addr pot.Address) bool {
@@ -85,23 +104,14 @@ func (ps *Pss) isActive(addr pot.Address) bool {
 	}
 	return true
 }
-/*
-func (ps *Pss) GetPssPeer(id adapters.NodeId) PssPeer {
-	return ps.PeerPool[id]
-}
-*/
-func NewPss(k Overlay, id *adapters.NodeId) *Pss {
-	return &Pss{
-		Overlay:   k,
-		NodeId: id,
-		PeerPool: make(map[pot.Address]PssReadWriter, PssPeerCapacity),
-	}
+
+func (ps *Pss) GetPeerFromNodeId(id adapters.NodeId) pot.Address {
+	return ps.PeerReverse[id]
 }
 
 func (ps *Pss) Send(to []byte, code uint64, msg interface{}) error {
 	// rlp encode msg
 	sent := false
-	glog.V(logger.Detail).Infof("pss-sending msg code %v: %v", code, msg)
 	
 	rlpbundle, err := ps.MakeMsg(code, msg)
 	if err != nil {
@@ -122,12 +132,12 @@ func (ps *Pss) Send(to []byte, code uint64, msg interface{}) error {
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
 	ps.Overlay.EachLivePeer(to, 255, func(p Peer, po int) bool {
-		
 		err := p.Send(&pssmsg)
 		if err != nil {
 			return true
 		}
 		sent = true
+		glog.V(logger.Detail).Infof("PSS-sending msg %v TO %v THROUGH %v", msg, to, p.OverlayAddr())
 		return false
 	})
 	if !sent {
@@ -137,27 +147,52 @@ func (ps *Pss) Send(to []byte, code uint64, msg interface{}) error {
 }
 
 type PssReadWriter struct {
-	Recipient pot.Address
+	*Pss
+	RecipientOAddr pot.Address
 	LastActive time.Time
 	rw        chan p2p.Msg
 }
 
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 	msg := <-prw.rw
-	glog.V(logger.Warn).Infof("got %v", msg)
+	glog.V(logger.Warn).Infof("pss readmsg %v", msg.Payload)
+	msg.Code += p2p.GetBaseProtocolLength()
 	return msg, nil
 }
 
 func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
-	prw.rw <- msg
+	//prw.Pss.decodeAndSend(prw.Recipient.Bytes(), msg)
 	return nil
 }
 
 func (prw PssReadWriter) InjectMsg(msg p2p.Msg) error {
-	glog.V(logger.Warn).Infof("inject %v on rw %v", msg, prw.rw)
+	glog.V(logger.Warn).Infof("pss injectmsg %v", msg, prw.rw)
 	prw.rw <- msg
 	return nil
 }
+
+// this messenger transports replies from the virtual protocol message handlers to the PssReadWriter
+// WITHOUT rlpencoding the content, and passes it on to PssReadWriter.WriteMsg
+type PssMessenger struct {
+	rw p2p.MsgReadWriter
+	RecipientUAddr adapters.NodeId
+	peerLookup func(adapters.NodeId) pot.Address
+	send func([]byte, uint64, interface{}) error
+}
+
+func (self *PssMessenger) SendMsg(code uint64, msg interface{}) error {
+	oaddr := self.peerLookup(self.RecipientUAddr)
+	return self.send(oaddr.Bytes(), code, msg)
+}
+
+func (self *PssMessenger) ReadMsg() (p2p.Msg, error) {
+	return self.rw.ReadMsg()
+}
+
+// this is not in use
+func (self *PssMessenger) Close() {
+}
+
 
 type PssProtocol struct {
 	*Pss
@@ -167,10 +202,7 @@ type PssProtocol struct {
 	ct              *protocols.CodeMap
 }
 
-// a new protocol is run using this signature:
-// func NewProtocol(protocolname string, protocolversion uint, run func(*Peer) error, na adapters.NodeAdapter, ct *CodeMap, peerInfo func(id discover.NodeID) interface{}, nodeInfo func() interface{}) *p2p.Protocol {
-// the run function is the extended run function to the protocol runnning on the peer, before which a new protocols.peer is created with the messenger passed in the nodeadapter passed in the constructor
-
+// PssProtocol holds the virtual protocol, which will handle the pss payload
 // the pssprotocol newprotocol function is a REPLACEMENT which implements the following adjustment:
 // * it uses the pssmessenger
 
@@ -202,19 +234,6 @@ func NewPssProtocol(pss *Pss, topic string, version uint, run func(*p2p.VirtualP
 	return pp
 }
 
-func (ps *Pss) Add(id pot.Address, rw PssReadWriter) error {
-	if ps.PeerPool[id] != zeroRW {
-		return fmt.Errorf("Peer pss entry '%v' already exists", id)
-	}
-	ps.PeerPool[id] = rw
-	return nil
-}
-
-func (ps *Pss) Remove(id pot.Address) {
-	ps.PeerPool[id] = zeroRW
-	return
-}
-
 func (pp *PssProtocol) handlePss(msg interface{}) error {
 	rmsg := &pssPayload{}
 	pssmsg := msg.(*PssMsg)
@@ -236,23 +255,24 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 
 		if !pp.isActive(oaddrhash.Address) {
 			rw := PssReadWriter{
-				Recipient: oaddrhash.Address,
+				Pss: pp.Pss,
+				RecipientOAddr: oaddrhash.Address,
 				rw:        make(chan p2p.Msg),
 			}
 			p := p2p.NewPeer(nid.NodeID, "foo", []p2p.Cap{})
-
-			// might need to have a channel to check if everything is set up properly
-			// fake it here with a small wait
+			
 			go func() {
-				pp.Add(oaddrhash.Address, rw)
+				pp.Add(oaddrhash.Address, rw, nid)
 				pp.VirtualProtocol.Run(p, rw)
 				pp.Remove(oaddrhash.Address)
 				close(rw.rw)
 				return
 			}()
-			time.Sleep(time.Millisecond * 250)
 		}
-
+		
+		// wait for the virtualpeer to get into the readloop
+		time.Sleep(time.Millisecond * 250)
+		
 		// to be ignored, just making sure things are sane while testing
 		/*pmsg, found := pp.ct.GetInterface(rmsg.Code)
 		if !found {
@@ -275,6 +295,7 @@ func (pp *PssProtocol) handlePss(msg interface{}) error {
 		}
 		
 		pp.PeerPool[oaddrhash.Address].InjectMsg(imsg)
+		
 
 	} else {
 		pp.EachLivePeer(to, 255, func(p Peer, po int) bool {
