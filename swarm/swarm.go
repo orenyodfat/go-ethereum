@@ -55,6 +55,7 @@ type Swarm struct {
 	privateKey  *ecdsa.PrivateKey
 	corsString  string
 	swapEnabled bool
+	pssEnabled  bool
 	lstore      *storage.LocalStore // local store, needs to store for releasing resources after node stopped
 	sfs         *fuse.SwarmFS       // need this to cleanup all the active mounts on node exit
 }
@@ -75,7 +76,7 @@ func (self *Swarm) API() *SwarmAPI {
 
 // creates a new swarm service instance
 // implements node.Service
-func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.Config, swapEnabled, syncEnabled bool, cors string) (self *Swarm, err error) {
+func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.Config, swapEnabled, syncEnabled bool, cors string, pssEnabled bool) (self *Swarm, err error) {
 	if bytes.Equal(common.FromHex(config.PublicKey), storage.ZeroKey) {
 		return nil, fmt.Errorf("empty public key")
 	}
@@ -89,6 +90,7 @@ func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.
 		backend:     backend,
 		privateKey:  config.Swap.PrivateKey(),
 		corsString:  cors,
+		pssEnabled:	pssEnabled,
 	}
 	log.Debug(fmt.Sprintf("Setting up Swarm service components"))
 
@@ -188,13 +190,19 @@ func (self *Swarm) Start(net *p2p.Server) error {
 	}
 
 	log.Warn(fmt.Sprintf("Starting Swarm service"))
+	
 	self.hive.Start(
-		discover.PubkeyID(&net.PrivateKey.PublicKey),
+		nid,
 		func() string { return net.ListenAddr },
 		connectPeer,
 	)
 	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
 
+	if self.pssEnabled {
+		pss := network.NewPss(self.hive.Overlay, &nid)
+		glog.V(logger.Info).Infof("Pss started")
+	}
+	
 	self.dpa.Start()
 	log.Debug(fmt.Sprintf("Swarm DPA started"))
 
@@ -332,7 +340,7 @@ func NewLocalSwarm(datadir, port string) (self *Swarm, err error) {
 
 	return
 }
-
+	
 // serialisable info about swarm
 type Info struct {
 	*api.Config

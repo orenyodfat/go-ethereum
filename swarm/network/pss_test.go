@@ -161,8 +161,8 @@ func TestPssRoundtrip(t *testing.T) {
 //   2. passed to ProtoRW.in from VirtualPeer.running["topic"] in p2p.handle()
 //   3. comes out on the PssMessenger on the protocols.Peer, in handleIncoming()
 //   4. passed to the handler, which in this case just echoes it back by sending using protocols.Peer.Send()
-//   6. passed to hacked PssMessenger's SendMsg on the protocols.Peer
-//   7. passed to Pss.Send(), which iterates its kademlia and attempts to forward
+//   5. passed to hacked PssMessenger's SendMsg on the protocols.Peer
+//   6. passed to Pss.Send(), which iterates its kademlia and attempts to forward
 
 func newPssProtocolTester(t *testing.T, n int, topic string, version uint, addr *peerAddr) *pssProtocolTester {
 

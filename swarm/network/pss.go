@@ -26,6 +26,13 @@ var (
 	zeroRW = PssReadWriter{}
 )
 
+type PssParams struct {	
+}
+
+func NewPssParams() *PssParams {
+	return &PssParams{}
+}
+
 type PssMsg struct {
 	To   []byte
 	Data PssEnvelope
