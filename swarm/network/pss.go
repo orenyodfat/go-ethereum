@@ -76,10 +76,11 @@ type Pss struct {
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
 }
 
-func NewPss(k Overlay, id *adapters.NodeId) *Pss {
+// todo error check overlay integrity
+func NewPss(k Overlay) *Pss {
 	return &Pss{
 		Overlay:  k,
-		NodeId:   id,
+		NodeId:   adapters.NewNodeId(k.GetAddr().UnderlayAddr()),
 		PeerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		//PeerReverse: make(map[adapters.NodeId]pot.Address, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
@@ -321,8 +322,8 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 }
 
 func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
-	glog.V(logger.Detail).Infof("comparing to %v to localaddr %v", msg.To, ps.GetAddr())
-	if bytes.Equal(ps.GetMsgRecipient(msg), ps.Overlay.GetAddr()) {
+	glog.V(logger.Detail).Infof("comparing to %v to localaddr %v", msg.To, ps.GetAddr().OverlayAddr())
+	if bytes.Equal(ps.GetMsgRecipient(msg), ps.Overlay.GetAddr().OverlayAddr()) {
 		return true
 	}
 	return false

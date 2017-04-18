@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/api"
@@ -45,10 +47,10 @@ type Swarm struct {
 	config      *api.Config            // swarm configuration
 	api         *api.Api               // high level api layer (fs/manifest)
 	dns         api.Resolver           // DNS registrar
-	dbAccess    *network.DbAccess      // access to local chunk db iterator and storage counter
+	//dbAccess    *network.DbAccess      // access to local chunk db iterator and storage counter
 	storage     storage.ChunkStore     // internal access to storage, common interface to cloud storage backends
 	dpa         *storage.DPA           // distributed preimage archive, the local API to the storage with document level storage/retrieval support
-	depo        network.StorageHandler // remote request handler, interface between bzz protocol and the storage
+	//depo        network.StorageHandler // remote request handler, interface between bzz protocol and the storage
 	cloud       storage.CloudStore     // procurement, cloud storage backend (can multi-cloud)
 	hive        *network.Hive          // the logistic manager
 	backend     chequebook.Backend     // simple blockchain Backend
@@ -56,8 +58,10 @@ type Swarm struct {
 	corsString  string
 	swapEnabled bool
 	pssEnabled  bool
+	pss			*network.Pss
 	lstore      *storage.LocalStore // local store, needs to store for releasing resources after node stopped
 	sfs         *fuse.SwarmFS       // need this to cleanup all the active mounts on node exit
+	na			*adapters.NodeAdapter
 }
 
 type SwarmAPI struct {
@@ -101,31 +105,36 @@ func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.
 	}
 
 	// setup local store
-	log.Debug(fmt.Sprintf("Set up local storage"))
+	//glog.V(logger.Debug).Infof("Set up local storage")
 
-	self.dbAccess = network.NewDbAccess(self.lstore)
-	log.Debug(fmt.Sprintf("Set up local db access (iterator/counter)"))
-
+	//self.dbAccess = network.NewDbAccess(self.lstore)
+	glog.V(logger.Debug).Infof("Set up local db access (iterator/counter)")
+	
+	kp := &network.KadParams{
+	}
+	
+	to := network.NewKademlia(
+		common.FromHex(config.BzzKey),
+		kp,
+	)
 	// set up the kademlia hive
 	self.hive = network.NewHive(
-		common.HexToHash(self.config.BzzKey), // key to hive (kademlia base address)
 		config.HiveParams,                    // configuration parameters
-		swapEnabled,                          // SWAP enabled
-		syncEnabled,                          // syncronisation enabled
+		to,
 	)
 	log.Debug(fmt.Sprintf("Set up swarm network with Kademlia hive"))
 
 	// setup cloud storage backend
-	cloud := network.NewForwarder(self.hive)
-	log.Debug(fmt.Sprintf("-> set swarm forwarder as cloud storage backend"))
+	//cloud := network.NewForwarder(self.hive)
+	//glog.V(logger.Debug).Infof("-> set swarm forwarder as cloud storage backend")
+	
 	// setup cloud storage internal access layer
-
-	self.storage = storage.NewNetStore(hash, self.lstore, cloud, config.StoreParams)
-	log.Debug(fmt.Sprintf("-> swarm net store shared access layer to Swarm Chunk Store"))
+	self.storage = storage.NewNetStore(hash, self.lstore, nil, config.StoreParams)
+	glog.V(logger.Debug).Infof("-> swarm net store shared access layer to Swarm Chunk Store")
 
 	// set up Depo (storage handler = cloud storage access layer for incoming remote requests)
-	self.depo = network.NewDepo(hash, self.lstore, self.storage)
-	log.Debug(fmt.Sprintf("-> REmote Access to CHunks"))
+	// self.depo = network.NewDepo(hash, self.lstore, self.storage)
+	// glog.V(logger.Debug).Infof("-> REmote Access to CHunks")
 
 	// set up DPA, the cloud storage local access layer
 	dpaChunkStore := storage.NewDpaChunkStore(self.lstore, self.storage)
@@ -191,16 +200,27 @@ func (self *Swarm) Start(net *p2p.Server) error {
 
 	log.Warn(fmt.Sprintf("Starting Swarm service"))
 	
-	self.hive.Start(
+	nid := discover.PubkeyID(&net.PrivateKey.PublicKey)
+	glog.V(logger.Warn).Infof("Starting Swarm service")
+	/*self.hive.Start(
 		nid,
 		func() string { return net.ListenAddr },
 		connectPeer,
+	)*/
+	self.hive.Start(
+		connectPeer,
+		func () <-chan time.Time{
+			return time.NewTicker(time.Second).C
+		},
 	)
+
 	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
 
+	self.na = adapters.NewRLPx(nid[:], net, adapters.NewRLPxMessenger)
+
 	if self.pssEnabled {
-		pss := network.NewPss(self.hive.Overlay, &nid)
-		glog.V(logger.Info).Infof("Pss started")
+		self.pss = network.NewPss(self.hive.Overlay)
+		glog.V(logger.Info).Infof("Pss started: %v", self.pss)
 	}
 	
 	self.dpa.Start()
@@ -243,11 +263,37 @@ func (self *Swarm) Stop() error {
 
 // implements the node.Service interface
 func (self *Swarm) Protocols() []p2p.Protocol {
-	proto, err := network.Bzz(self.depo, self.backend, self.hive, self.dbAccess, self.config.Swap, self.config.SyncParams, self.config.NetworkId)
-	if err != nil {
+	//proto, err := network.Bzz(self.depo, self.backend, self.hive, self.dbAccess, self.config.Swap, self.config.SyncParams, self.config.NetworkId)
+	ct := network.BzzCodeMap()
+	for _, m := range network.DiscoveryMsgs {
+		ct.Register(m)
+	}
+	if self.pssEnabled {
+		ct.Register(&network.PssMsg{})
+	}
+	
+	srv := func(p network.Peer) error {
+		if self.pssEnabled {
+			//p.Register(&PssMsg{}, self.pssFunc)
+			glog.V(logger.Warn).Infof("pss is enabled, but handler not yet implemented - it won't work yet, sorry")
+		}
+		self.hive.Add(p)
+		p.DisconnectHook(func(err error) {
+			self.hive.Remove(p)
+		})
 		return nil
 	}
-	return []p2p.Protocol{proto}
+	
+	proto := network.Bzz(
+		self.hive.Overlay.GetAddr().OverlayAddr(),
+		self.na,
+		ct,
+		srv,
+		nil,
+		nil,
+	)
+	
+	return []p2p.Protocol{*proto}
 }
 
 // implements node.Service
@@ -310,7 +356,7 @@ func (self *Swarm) SetChequebook(ctx context.Context) error {
 	}
 	log.Info(fmt.Sprintf("new chequebook set (%v): saving config file, resetting all connections in the hive", self.config.Swap.Contract.Hex()))
 	self.config.Save()
-	self.hive.DropAll()
+	//self.hive.DropAll()
 	return nil
 }
 

@@ -116,7 +116,7 @@ var (
 	SwarmUploadMimeType = cli.StringFlag{
 		Name:  "mime",
 		Usage: "force mime type",
-	PssFlag = cli.BoolFlag{
+	PssEnabledFlag = cli.BoolFlag{
 		Name: "pss",
 		Usage: "Enable pss (message passing over swarm)",
 	}
@@ -264,7 +264,7 @@ Cleans database of corrupted entries.
 		SwarmUpFromStdinFlag,
 		SwarmUploadMimeType,
 		// pss flags
-		PssFlag,
+		PssEnabledFlag,
 	}
 	app.Flags = append(app.Flags, debug.Flags...)
 	app.Before = func(ctx *cli.Context) error {

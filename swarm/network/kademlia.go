@@ -198,8 +198,8 @@ func NewKadPeer(na PeerAddr) *KadPeer {
 
 // retrieve the base address
 // which is the overlayaddress used by peers to reach us
-func (self *Kademlia) GetAddr() []byte {
-	return self.addr.Bytes()
+func (self *Kademlia) GetAddr() PeerAddr {
+	return self.addr
 }
 
 // Register(nas) enters each PeerAddr as kademlia peers into the

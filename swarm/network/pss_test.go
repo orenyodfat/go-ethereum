@@ -118,7 +118,7 @@ func TestPssSimpleSelf(t *testing.T) {
 		Payload: pssdata,
 	}
 	pssmsg := PssMsg{
-		To:      ps.Overlay.GetAddr(),
+		To:      ps.Overlay.GetAddr().OverlayAddr(),
 		Payload: pssenv,
 	}
 
@@ -363,14 +363,14 @@ func TestPssProtocolReply(t *testing.T) {
 	}
 
 	pssenv := PssEnvelope{
-		SenderOAddr: ps.Overlay.GetAddr(),
-		SenderUAddr: addr.UnderlayAddr(),
+		SenderOAddr: ps.Overlay.GetAddr().OverlayAddr(),
+		SenderUAddr: ps.Overlay.GetAddr().UnderlayAddr(),
 		Topic:       topic,
 		TTL:         DefaultTTL,
 		Payload:     pssdata,
 	}
 	pssmsg := PssMsg{
-		To:      ps.Overlay.GetAddr(),
+		To:      ps.Overlay.GetAddr().OverlayAddr(),
 		Payload: pssenv,
 	}
 
@@ -497,13 +497,11 @@ func newPssBase(t *testing.T, topic string, version int, addr *peerAddr) *Pss {
 }
 
 func makePss(addr *peerAddr) *Pss {
-	nid := adapters.NewNodeId(addr.UnderlayAddr())
-
 	kp := NewKadParams()
 	kp.MinProxBinSize = 3
 
 	overlay := NewKademlia(addr.UnderlayAddr(), kp)
-	ps := NewPss(overlay, nid)
+	ps := NewPss(overlay)
 	return ps
 }
 
