@@ -88,7 +88,7 @@ func NewPss(k Overlay) *Pss {
 }
 
 func (self *Pss) Register(name string, version int, handler func(msg []byte, p *p2p.Peer, from []byte) error) error {
-	t, err := self.MakeTopic(name, version)
+	t, err := MakeTopic(name, version)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (self *Pss) Register(name string, version int, handler func(msg []byte, p *
 }
 
 func (self *Pss) GetHandler(name string, version int) func([]byte, *p2p.Peer, []byte) error {
-	t, err := self.MakeTopic(name, version) // if deterministic, maybe its not after we have topic obfuscation
+	t, err := MakeTopic(name, version) // if deterministic, maybe its not after we have topic obfuscation
 	if err != nil {
 		return nil
 	}
@@ -134,44 +134,6 @@ func (self *Pss) isActive(id pot.Address, topic PssTopic) bool {
 	return true
 }
 
-// if too long topic is sent will return only 0s, should be considered error
-// Pre-Whisper placeholder
-func (self *Pss) MakeTopic(s string, v int) (PssTopic, error) {
-	t := [TopicLength]byte{}
-	if len(s)+4 <= TopicLength {
-		copy(t[4:len(s)+4], s)
-	} else {
-		return t, fmt.Errorf("topic '%t' too long", s)
-	}
-	binary.PutVarint(t[:4], int64(v))
-	return t, nil
-}
-
-// references the p2p.Msg structure, but with non-buffered byte payload, and with sender address
-// Pre-Whisper placeholder
-func (ps *Pss) MakeMsg(code uint64, msg interface{}) ([]byte, error) {
-
-	rlpdata, err := rlp.EncodeToBytes(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	// previous attempts corrupted nested structs in the payload iself upon deserializing
-	// therefore we use two separate []byte fields instead of peerAddr
-	// TODO verify that nested structs cannot be used in rlp
-	smsg := &pssPayload{
-		Code: code,
-		Size: uint32(len(rlpdata)),
-		Data: rlpdata,
-	}
-
-	rlpbundle, err := rlp.EncodeToBytes(smsg)
-	if err != nil {
-		return nil, err
-	}
-
-	return rlpbundle, nil
-}
 
 /*
 func (self *Pss) GetPeerFromNodeId(id adapters.NodeId) pot.Address {
@@ -183,12 +145,12 @@ func (self *Pss) GetPeerFromNodeId(id adapters.NodeId) pot.Address {
 // the reply to incoming self.msgs also ends up here in the end
 func (self *Pss) Send(to []byte, code uint64, msg interface{}) error {
 
-	rlpbundle, err := self.MakeMsg(code, msg)
+	rlpbundle, err := MakeMsg(code, msg)
 	if err != nil {
 		return err
 	}
 
-	t, err := self.MakeTopic("foo", 42)
+	t, err := MakeTopic("foo", 42)
 
 	pssenv := PssEnvelope{
 		Topic:   t,
@@ -214,14 +176,14 @@ func (self *Pss) Forward(msg *PssMsg) error {
 		glog.V(logger.Debug).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x", msg, msg.To, p.OverlayAddr())
 		err := p.Send(msg)
 		if err != nil {
+			glog.V(logger.Warn).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x FAILED: %v", msg, msg.To, p.OverlayAddr(), err)
 			return true
 		}
 		sent = true
-
 		return false
 	})
 	if !sent {
-		return fmt.Errorf("Was not able to send to any peers")
+		return fmt.Errorf("PSS Was not able to send to any peers")
 	}
 	
 	return nil
@@ -331,4 +293,44 @@ func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
 
 func (ps *Pss) GetMsgRecipient(msg *PssMsg) []byte {
 	return msg.To
+}
+
+
+// references the p2p.Msg structure, but with non-buffered byte payload, and with sender address
+// Pre-Whisper placeholder
+func MakeMsg(code uint64, msg interface{}) ([]byte, error) {
+
+	rlpdata, err := rlp.EncodeToBytes(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	// previous attempts corrupted nested structs in the payload iself upon deserializing
+	// therefore we use two separate []byte fields instead of peerAddr
+	// TODO verify that nested structs cannot be used in rlp
+	smsg := &pssPayload{
+		Code: code,
+		Size: uint32(len(rlpdata)),
+		Data: rlpdata,
+	}
+
+	rlpbundle, err := rlp.EncodeToBytes(smsg)
+	if err != nil {
+		return nil, err
+	}
+
+	return rlpbundle, nil
+}
+
+// if too long topic is sent will return only 0s, should be considered error
+// Pre-Whisper placeholder
+func MakeTopic(s string, v int) (PssTopic, error) {
+	t := [TopicLength]byte{}
+	if len(s)+4 <= TopicLength {
+		copy(t[4:len(s)+4], s)
+	} else {
+		return t, fmt.Errorf("topic '%t' too long", s)
+	}
+	binary.PutVarint(t[:4], int64(v))
+	return t, nil
 }
