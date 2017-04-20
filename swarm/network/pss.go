@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -41,7 +42,7 @@ type PssMsg struct {
 }
 
 func (pm *PssMsg) String() string {
-	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To)
+	return fmt.Sprintf("PssMsg: Recipient: %x", pm.To[:8])
 }
 
 // Pre-Whisper placeholder
@@ -96,12 +97,8 @@ func (self *Pss) Register(name string, version int, handler func(msg []byte, p *
 	return nil
 }
 
-func (self *Pss) GetHandler(name string, version int) func([]byte, *p2p.Peer, []byte) error {
-	t, err := MakeTopic(name, version) // if deterministic, maybe its not after we have topic obfuscation
-	if err != nil {
-		return nil
-	}
-	return self.handlers[t]
+func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) error {
+	return self.handlers[topic]
 }
 
 func (self *Pss) AddPeerTopic(id pot.Address, topic PssTopic, rw *PssReadWriter) error {
@@ -134,28 +131,16 @@ func (self *Pss) isActive(id pot.Address, topic PssTopic) bool {
 	return true
 }
 
-
-/*
-func (self *Pss) GetPeerFromNodeId(id adapters.NodeId) pot.Address {
-	return self.PeerReverse[id]
-}
-*/
-
 // we have the send on the self., because if we should be able to initiate a send without worring about the rest of the stack
 // the reply to incoming self.msgs also ends up here in the end
-func (self *Pss) Send(to []byte, code uint64, msg interface{}) error {
-
-	rlpbundle, err := MakeMsg(code, msg)
-	if err != nil {
-		return err
-	}
-
-	t, err := MakeTopic("foo", 42)
+func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
 
 	pssenv := PssEnvelope{
-		Topic:   t,
+		SenderOAddr: self.Overlay.GetAddr().OverlayAddr(),
+		SenderUAddr: self.Overlay.GetAddr().UnderlayAddr(),
+		Topic:   topic,
 		TTL:     DefaultTTL,
-		Payload: rlpbundle,
+		Payload: msg,
 	}
 
 	pssmsg := &PssMsg{
@@ -168,15 +153,17 @@ func (self *Pss) Send(to []byte, code uint64, msg interface{}) error {
 
 func (self *Pss) Forward(msg *PssMsg) error {
 
+	// TODO:check integrity of message
+	
 	sent := false
 	
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
 	self.Overlay.EachLivePeer(msg.To, 255, func(p Peer, po int) bool {
-		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x", self.Overlay.GetAddr().OverlayAddr(), msg.To, p.OverlayAddr())
+		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()))
 		err := p.Send(msg)
 		if err != nil {
-			glog.V(logger.Warn).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x FAILED: %v", msg, msg.To, p.OverlayAddr(), err)
+			glog.V(logger.Warn).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x FAILED: %v", msg, common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()), err)
 			return true
 		}
 		sent = true
@@ -196,34 +183,38 @@ type PssReadWriter struct {
 	LastActive     time.Time
 	rw             chan p2p.Msg
 	ct             *protocols.CodeMap
+	topic	       *PssTopic
 }
 
 // get incoming msg
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 	msg := <-prw.rw
-	glog.V(logger.Detail).Infof("pss readmsg %v", msg)
+	glog.V(logger.Detail).Infof("pssrw readmsg %v", msg)
 
 	// p2p.ProtoRW.ReadMsg() offset deducts this later, we need to add to get past the baseProtocolLength check in p2p.handle()
 	//msg.Code += p2p.GetBaseProtocolLength()
 	return msg, nil
 }
 
-// currently not in use (because we can't access the original msg struct to pass on to Pss.Send)
+// whisper encoding goes here
+// this is however inefficient because we are doing a redundant round of rlp encoding of the message payload
 func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
-	glog.V(logger.Detail).Infof("pss writemsg %v", msg)
+	glog.V(logger.Detail).Infof("pssrw writemsg %v", msg)
 	ifc, found := prw.ct.GetInterface(msg.Code)
 	if !found {
 		return fmt.Errorf("Writemsg couldn't find matching interface for code %d", msg.Code)
 	}
 	rlp.Decode(msg.Payload, ifc)
 	to := prw.RecipientOAddr.Bytes()
+	
+	pmsg, _ := MakeMsg(msg.Code, ifc)
 
-	return prw.Pss.Send(to, msg.Code, ifc)
+	return prw.Pss.Send(to, *prw.topic, pmsg)
 }
 
 // insert a incoming message on the p2p.VirtualPeer hack
 func (prw PssReadWriter) injectMsg(msg p2p.Msg) error {
-	glog.V(logger.Detail).Infof("pss injectmsg %v", msg)
+	glog.V(logger.Detail).Infof("pssrw injectmsg %v", msg)
 	prw.rw <- msg
 	return nil
 }
@@ -232,16 +223,16 @@ func (prw PssReadWriter) injectMsg(msg p2p.Msg) error {
 // TODO: needs review to see if it can be made leaner
 type PssProtocol struct {
 	*Pss
-	Topic           *PssTopic
-	VirtualProtocol *p2p.Protocol
+	virtualProtocol *p2p.Protocol
+	topic           *PssTopic
 	ct              *protocols.CodeMap
 }
 
 func NewPssProtocol(pss *Pss, topic *PssTopic, ct *protocols.CodeMap, targetprotocol *p2p.Protocol) *PssProtocol {
 	pp := &PssProtocol{
 		Pss:             pss,
-		Topic:           topic,
-		VirtualProtocol: targetprotocol,
+		virtualProtocol: targetprotocol,
+		topic:           topic,
 		ct:              ct,
 	}
 	return pp
@@ -253,17 +244,18 @@ func (self *PssProtocol) GetHandler() func([]byte, *p2p.Peer, []byte) error {
 
 func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) error {
 	hashoaddr := pot.NewHashAddressFromBytes(senderAddr).Address
-	if !self.isActive(hashoaddr, *self.Topic) {
+	if !self.isActive(hashoaddr, *self.topic) {
 		rw := &PssReadWriter{
 			Pss:            self.Pss,
 			RecipientOAddr: hashoaddr,
 			rw:             make(chan p2p.Msg),
 			ct:             self.ct,
+			topic:			self.topic,
 		}
-		self.Pss.AddPeerTopic(hashoaddr, *self.Topic, rw)
+		self.Pss.AddPeerTopic(hashoaddr, *self.topic, rw)
 		go func() {
-			err := self.VirtualProtocol.Run(p, rw)
-			glog.V(logger.Detail).Infof("vprotocol on addr %v topic %v quit: %v", hashoaddr, self.Topic, err)
+			err := self.virtualProtocol.Run(p, rw)
+			glog.V(logger.Detail).Infof("vprotocol on addr %v topic %v quit: %v", hashoaddr, self.topic, err)
 		}()
 		// we need a protocol ready reporting channel here
 	}
@@ -278,7 +270,7 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 		Payload:    bytes.NewBuffer(payload.Data),
 	}
 
-	self.Pss.PeerPool[hashoaddr][*self.Topic].injectMsg(pmsg)
+	self.Pss.PeerPool[hashoaddr][*self.topic].injectMsg(pmsg)
 
 	return nil
 }

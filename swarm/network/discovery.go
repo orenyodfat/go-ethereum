@@ -53,12 +53,9 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 	resp := &peersMsg{
 		Peers: []*peerAddr{&peerAddr{OAddr: p.OverlayAddr(), UAddr: p.UnderlayAddr()}}, // perhaps the PeerAddr interface is unnecessary generalization
 	}
-	errorc := make(chan error)
-	go func() {
-		errorc <- self.Send(resp)
-	}()
-	err := <- errorc
-	return err
+	go self.Send(resp)
+	//return err
+	return nil
 }
 
 // NotifyProx sends a subPeers Msg to the receiver notifying them about
@@ -66,12 +63,9 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 // or first empty row)
 // callback for overlay driver
 func (self *discPeer) NotifyProx(po uint8) error {
-	errorc := make(chan error)
-	go func() {
-		errorc <- self.Send(&subPeersMsg{ProxLimit: po})
-	}()
-	err := <- errorc
-	return err
+	go self.Send(&subPeersMsg{ProxLimit: po})
+	//return err
+	return nil
 }
 
 /*
