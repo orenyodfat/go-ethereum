@@ -173,7 +173,7 @@ func (self *Pss) Forward(msg *PssMsg) error {
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
 	self.Overlay.EachLivePeer(msg.To, 255, func(p Peer, po int) bool {
-		glog.V(logger.Debug).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x", msg, msg.To, p.OverlayAddr())
+		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x", self.Overlay.GetAddr().OverlayAddr(), msg.To, p.OverlayAddr())
 		err := p.Send(msg)
 		if err != nil {
 			glog.V(logger.Warn).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x FAILED: %v", msg, msg.To, p.OverlayAddr(), err)
