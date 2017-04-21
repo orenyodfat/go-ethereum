@@ -643,7 +643,7 @@ func newPssTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handle
 	hive := NewHive(NewHiveParams(), ps.Overlay)
 	nid := adapters.NewNodeId(addr.UnderlayAddr())
 	
-	nodeAdapter := adapters.NewSimNode(nid, net, adapters.NewSimPipe)
+	nodeAdapter := adapters.NewSimNode(nid, net)
 	node := &pssTestNode{
 		Hive:        hive,
 		Pss:		 ps,
@@ -663,15 +663,16 @@ func newPssTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handle
 		return nil
 	}
 
-	nodeAdapter.Run = Bzz(addr.OverlayAddr(), node.NodeAdapter, ct, srv, nil, nil).Run
+	nodeAdapter.Run = Bzz(addr.OverlayAddr(), addr.UnderlayAddr(), ct, srv, nil, nil).Run
 	
 	return node
 }
 
 func newPssProtocolTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handlefunc func(interface{}) error) (*p2ptest.ProtocolTester, *protocols.CodeMap) {
 	testnode := newPssTester(t, ps, addr, numsimnodes, handlefunc, nil, nil)
-	protocall := func(na adapters.NodeAdapter) adapters.ProtoCall {
-		return testnode.NodeAdapter.(*adapters.SimNode).Run
+	protocall := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+		discreason := p.Run()
+		return fmt.Errorf("%v", discreason.String())
 	}
 	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, protocall)
 	return ptt, testnode.ct
@@ -691,12 +692,6 @@ func makePss(addr *peerAddr) *Pss {
 }
 
 func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *adapters.NodeId) *p2p.Protocol {
-	// creating a protocols.Protocol means using a protocols.Peer
-	// so we need codemap, messenger, nodeadapter
-	na := adapters.NewSimNode(id, nil, func(rw p2p.MsgReadWriter) adapters.Messenger {
-		return adapters.NewSimPipe(rw)
-	})
-
 	run := func(p *protocols.Peer) error {
 		glog.V(logger.Detail).Infof("running vprotocol: %v", p)
 		ptp := &PssTestPeer{ // analogous to bzzPeer in the Bzz() protocol constructor
@@ -707,7 +702,7 @@ func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *ada
 		return err
 	}
 
-	return protocols.NewProtocol(name, uint(version), run, na, ct, nil, nil)
+	return protocols.NewProtocol(name, uint(version), run, ct, nil, nil)
 }
 
 // does exactly what it says
