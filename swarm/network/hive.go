@@ -124,7 +124,7 @@ func (self *Hive) Start(connectPeer func(string) error, af func() <-chan time.Ti
 
 			want = want && self.Discovery
 			if want {
-				RequestOrder(self.Overlay, uint8(order), self.PeersBroadcastSetSize, self.MaxPeersPerRequest)
+				go RequestOrder(self.Overlay, uint8(order), self.PeersBroadcastSetSize, self.MaxPeersPerRequest)
 			}
 
 			select {

@@ -129,7 +129,7 @@ func (self *discPeer) handleSubPeersMsg(msg interface{}) error {
 		})
 		log.Warn(fmt.Sprintf("found initial %v peers not farther than %v", len(peers), self.proxLimit))
 		if len(peers) > 0 {
-			self.Send(&peersMsg{Peers: peers})
+			go self.Send(&peersMsg{Peers: peers})
 		}
 	}
 	self.sentPeers = true
@@ -181,7 +181,8 @@ func (self *discPeer) handleGetPeersMsg(msg interface{}) error {
 	resp := &peersMsg{
 		Peers: peers,
 	}
-	return self.Send(resp)
+	go self.Send(resp)
+	return nil 
 }
 
 func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {

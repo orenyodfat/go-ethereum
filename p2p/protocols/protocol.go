@@ -296,6 +296,7 @@ func (self *Peer) Send(msg interface{}) error {
 		}
 	case <-time.NewTimer(3000 * time.Millisecond).C:
 		err = fmt.Errorf("write timeout")
+		panic(err)
 	}
 	err = errorf(ErrWrite, "(msg code: %v): %v", code, err)
 	self.Drop(err)
