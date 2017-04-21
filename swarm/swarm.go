@@ -216,7 +216,7 @@ func (self *Swarm) Start(net *p2p.Server) error {
 
 	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
 
-	self.na = adapters.NewRLPx(nid[:], net, adapters.NewRLPxMessenger)
+	self.na = adapters.NewRLPx(nid[:], net)
 
 	if self.pssEnabled {
 		self.pss = network.NewPss(self.hive.Overlay)
@@ -286,7 +286,7 @@ func (self *Swarm) Protocols() []p2p.Protocol {
 	
 	proto := network.Bzz(
 		self.hive.Overlay.GetAddr().OverlayAddr(),
-		self.na,
+		self.hive.Overlay.GetAddr().UnderlayAddr(),
 		ct,
 		srv,
 		nil,

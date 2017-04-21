@@ -42,6 +42,7 @@ type pssTestNode struct {
 	id      *adapters.NodeId
 	network *simulations.Network
 	trigger chan *adapters.NodeId
+	run	adapters.ProtoCall
 	ct	*protocols.CodeMap
 }
 
@@ -76,6 +77,10 @@ func (n *pssTestNode) triggerCheck() {
 
 func (n *pssTestNode) RunProtocol(id *adapters.NodeId, rw, rrw p2p.MsgReadWriter, peer *adapters.Peer) error {
 	return n.NodeAdapter.(adapters.ProtocolRunner).RunProtocol(id, rw, rrw, peer)
+}
+
+func (n *pssTestNode) ProtoCall() adapters.ProtoCall {
+	return n.run
 }
 
 // the content of the msgs we're sending in the tests
@@ -663,25 +668,24 @@ func newPssTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handle
 		return nil
 	}
 
-	nodeAdapter.Run = Bzz(addr.OverlayAddr(), addr.UnderlayAddr(), ct, srv, nil, nil).Run
+	node.run = Bzz(addr.OverlayAddr(), addr.UnderlayAddr(), ct, srv, nil, nil).Run
+	nodeAdapter.Run = node.run
 	
 	return node
 }
 
 func newPssProtocolTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handlefunc func(interface{}) error) (*p2ptest.ProtocolTester, *protocols.CodeMap) {
 	testnode := newPssTester(t, ps, addr, numsimnodes, handlefunc, nil, nil)
-	protocall := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+	/*protocall := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+		glog.V(logger.Detail).Infof("in protocall peer %v rw %v", p, rw)
 		discreason := p.Run()
 		return fmt.Errorf("%v", discreason.String())
-	}
-	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, protocall)
+	}*/
+	//ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, protocall)
+	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, testnode.ProtoCall())
 	return ptt, testnode.ct
 }
-/*
-func newPssBase(t *testing.T, topic string, version int, addr *peerAddr) *Pss {
-	return makePss(addr)
-}
-*/
+
 func makePss(addr *peerAddr) *Pss {
 	kp := NewKadParams()
 	kp.MinProxBinSize = 3
@@ -762,7 +766,7 @@ func makePssHandleProtocol(ps *Pss) func(msg interface{}) error {
 				return fmt.Errorf("No registered handler for topic '%s'", env.Topic)
 			}
 			nid := adapters.NewNodeId(env.SenderUAddr)
-			p := p2p.NewPeer(nid.NodeID, "psspeer", []p2p.Cap{})
+			p := p2p.NewPeer(nid.NodeID, adapters.Name(nid.Bytes()), []p2p.Cap{})
 			return f(umsg, p, env.SenderOAddr)
 		} else {
 			return ps.Forward(pssmsg)

@@ -264,7 +264,7 @@ func (self *Kademlia) On(p Peer) {
 		dp.NotifyPeer(kp.Peer, uint8(po))
 		if uint8(prox) != self.lastProxLimit {
 			self.lastProxLimit = uint8(prox)
-			dp.NotifyProx(uint8(prox))
+			go dp.NotifyProx(uint8(prox))
 		}
 		log.Debug("peer notified")
 	}
