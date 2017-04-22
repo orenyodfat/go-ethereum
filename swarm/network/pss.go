@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -14,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/pot"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/swarm/storage"
 )
 
 const (
@@ -22,6 +24,9 @@ const (
 	TopicResolverLength         = 8
 	PssPeerCapacity             = 256
 	PssPeerTopicDefaultCapacity = 8
+	digestLength                = 64
+	digestCapacity              = 256
+	defaultDigestCacheTTL       = time.Second
 )
 
 var (
@@ -64,6 +69,8 @@ type pssPayload struct {
 
 type PssTopic [TopicLength]byte
 
+type pssDigest uint32
+
 // Pss master object provides:
 // - access to the swarm overlay and routing (kademlia)
 // - a collection of remote overlay addresses mapped to MsgReadWriters, representing the virtually connected peers
@@ -75,17 +82,54 @@ type Pss struct {
 	PeerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	//PeerReverse map[adapters.NodeId]pot.Address // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
+	fwdcache map[pssDigest]time.Time                            // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
+	cachettl time.Duration                                      // how long to keep messages in fwdcache
+	hasher   hash.Hash                                          // hasher to digest message to cache
+}
+
+// 32bit checks should be enough for this use
+func (self *Pss) hashMsg(msg *PssMsg) pssDigest {
+	self.hasher.Reset()
+	self.hasher.Write(msg.To)
+	self.hasher.Write(msg.Payload.SenderUAddr)
+	self.hasher.Write(msg.Payload.SenderOAddr)
+	self.hasher.Write(msg.Payload.Topic[:])
+	self.hasher.Write(msg.Payload.Payload)
+	b := self.hasher.Sum([]byte{})
+	return pssDigest(binary.BigEndian.Uint32(b))
 }
 
 // todo error check overlay integrity
-func NewPss(k Overlay) *Pss {
+func NewPss(k Overlay, cachettl time.Duration) *Pss {
+	if cachettl == 0 {
+		cachettl = defaultDigestCacheTTL
+	}
 	return &Pss{
 		Overlay:  k,
 		NodeId:   adapters.NewNodeId(k.GetAddr().UnderlayAddr()),
 		PeerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		//PeerReverse: make(map[adapters.NodeId]pot.Address, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
+		fwdcache: make(map[pssDigest]time.Time),
+		cachettl: cachettl,
+		hasher:   storage.MakeHashFunc("SHA3")(),
 	}
+}
+
+// when full oldest out
+// periodically clean cache
+func (self *Pss) addToFwdCache(digest pssDigest) error {
+	self.fwdcache[digest] = time.Now().Add(self.cachettl)
+	return nil
+}
+
+// returns true if in cache AND not expired
+func (self *Pss) checkCache(digest pssDigest) bool {
+	entry, ok := self.fwdcache[digest]
+	if !ok || entry.Before(time.Now()) {
+		return false
+	}
+	return true
 }
 
 func (self *Pss) Register(name string, version int, handler func(msg []byte, p *p2p.Peer, from []byte) error) error {
@@ -138,9 +182,9 @@ func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
 	pssenv := PssEnvelope{
 		SenderOAddr: self.Overlay.GetAddr().OverlayAddr(),
 		SenderUAddr: self.Overlay.GetAddr().UnderlayAddr(),
-		Topic:   topic,
-		TTL:     DefaultTTL,
-		Payload: msg,
+		Topic:       topic,
+		TTL:         DefaultTTL,
+		Payload:     msg,
 	}
 
 	pssmsg := &PssMsg{
@@ -153,17 +197,31 @@ func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
 
 func (self *Pss) Forward(msg *PssMsg) error {
 
+	if self.isSelfRecipient(msg) {
+		return newPssError(pssError_ForwardToSelf)
+	}
+
+	digest := self.hashMsg(msg)
+
+	if self.checkCache(digest) {
+		glog.V(logger.Detail).Infof("Found in block-cache: PSS-relay msg FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To))
+		return nil
+		//return newPssError(pssError_BlockByCache)
+	}
+
+	self.addToFwdCache(digest)
+
 	// TODO:check integrity of message
-	
+
 	sent := false
-	
+
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
-	self.Overlay.EachLivePeer(msg.To, 255, func(p Peer, po int) bool {
-		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()))
+	self.Overlay.EachLivePeer(msg.To, 256, func(p Peer, po int) bool {
+		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x (%x)", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()), common.ByteLabel(p.UnderlayAddr()))
 		err := p.Send(msg)
 		if err != nil {
-			glog.V(logger.Warn).Infof("Attempting PSS-relay msg %v TO %x THROUGH %x FAILED: %v", msg, common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()), err)
+			glog.V(logger.Warn).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x (%x) FAILED: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()), common.ByteLabel(p.UnderlayAddr()), err)
 			return true
 		}
 		sent = true
@@ -172,7 +230,7 @@ func (self *Pss) Forward(msg *PssMsg) error {
 	if !sent {
 		return fmt.Errorf("PSS Was not able to send to any peers")
 	}
-	
+
 	return nil
 }
 
@@ -183,30 +241,30 @@ type PssReadWriter struct {
 	LastActive     time.Time
 	rw             chan p2p.Msg
 	ct             *protocols.CodeMap
-	topic	       *PssTopic
+	topic          *PssTopic
 }
 
 // get incoming msg
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 	msg := <-prw.rw
+
 	glog.V(logger.Detail).Infof("pssrw readmsg %v", msg)
 
-	// p2p.ProtoRW.ReadMsg() offset deducts this later, we need to add to get past the baseProtocolLength check in p2p.handle()
-	//msg.Code += p2p.GetBaseProtocolLength()
 	return msg, nil
 }
 
-// whisper encoding goes here
-// this is however inefficient because we are doing a redundant round of rlp encoding of the message payload
 func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 	glog.V(logger.Detail).Infof("pssrw writemsg %v", msg)
 	ifc, found := prw.ct.GetInterface(msg.Code)
 	if !found {
 		return fmt.Errorf("Writemsg couldn't find matching interface for code %d", msg.Code)
 	}
-	rlp.Decode(msg.Payload, ifc)
+	msg.Decode(ifc)
+
 	to := prw.RecipientOAddr.Bytes()
-	
+
+	glog.V(logger.Detail).Infof("pssrw writemsg %v", msg)
+
 	pmsg, _ := MakeMsg(msg.Code, ifc)
 
 	return prw.Pss.Send(to, *prw.topic, pmsg)
@@ -250,7 +308,7 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 			RecipientOAddr: hashoaddr,
 			rw:             make(chan p2p.Msg),
 			ct:             self.ct,
-			topic:			self.topic,
+			topic:          self.topic,
 		}
 		self.Pss.AddPeerTopic(hashoaddr, *self.topic, rw)
 		go func() {
@@ -276,7 +334,7 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 }
 
 func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
-	glog.V(logger.Detail).Infof("comparing to %v to localaddr %v", msg.To, ps.GetAddr().OverlayAddr())
+	glog.V(logger.Detail).Infof("comparing to %x to localaddr %x", msg.To, ps.GetAddr().OverlayAddr())
 	if bytes.Equal(ps.GetMsgRecipient(msg), ps.Overlay.GetAddr().OverlayAddr()) {
 		return true
 	}
@@ -286,7 +344,6 @@ func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
 func (ps *Pss) GetMsgRecipient(msg *PssMsg) []byte {
 	return msg.To
 }
-
 
 // references the p2p.Msg structure, but with non-buffered byte payload, and with sender address
 // Pre-Whisper placeholder

@@ -126,7 +126,9 @@ func (self *CodeMap) GetInterface(code uint64) (interface{}, bool) {
 	if int(code) > len(self.codes)-1 {
 		return nil, false
 	}
-	return reflect.New(self.codes[code]), true
+	typ := self.codes[code]
+	val := reflect.New(typ)
+	return val.Interface(), true
 }
 
 func (self *CodeMap) GetCode(msg interface{}) (uint64, bool) {
