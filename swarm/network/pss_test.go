@@ -32,6 +32,8 @@ func init() {
 // goal is that we can use the same for "normal" p2p.protocols operations aswell as pss
 type PssTestPeer struct {
 	*protocols.Peer
+	hasProtocol bool
+	successC chan bool
 }
 
 // example node simulation peer
@@ -193,7 +195,7 @@ func TestPssAddSingleHandler(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(protocolName, protocolVersion, vct, ps.NodeId)
+	targetprotocol := makeCustomProtocol(protocolName, protocolVersion, vct, ps.NodeId, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
 	ps.Register(protocolName, protocolVersion, pssprotocol.GetHandler())
 
@@ -224,12 +226,11 @@ func TestPssFullSelf(t *testing.T) {
 		Id:      "0",
 		Backend: true,
 	})
-
-	nodes := newPssSimulationTester(t, 3, net, trigger, vct, protocolName, protocolVersion)
+	testpeers := make(map[*adapters.NodeId]*PssTestPeer)
+	nodes := newPssSimulationTester(t, 3, []int{0,2}, net, trigger, vct, protocolName, protocolVersion, &testpeers)
 	ids := []*adapters.NodeId{} // ohh risky! but the action for a specific id should come before the expect anyway
+	
 
-	// run a simulation which connects the 10 nodes in a ring and waits
-	// for full peer discovery
 	action = func(ctx context.Context) error {
 		for id, _ := range nodes {
 			ids = append(ids, id)
@@ -286,7 +287,6 @@ func TestPssFullSelf(t *testing.T) {
 	for firstpssnode == nonode {
 		glog.V(logger.Debug).Infof("PSS kademlia: Waiting for relaypeer for %x close to %x ...", common.ByteLabel(nodes[ids[0]].OverlayAddr()), common.ByteLabel(nodes[ids[1]].OverlayAddr()))
 		nodes[ids[0]].Pss.Overlay.EachLivePeer(nodes[ids[2]].OverlayAddr(), 255, func(p Peer, po int) bool {
-			glog.V(logger.Detail).Infof("checking ", p.ID())
 			for _, id := range ids {
 				if id.NodeID == p.ID() {
 					glog.V(logger.Debug).Infof("found PSS relay %v (not %v) in routing table of %v", id.NodeID, ids[0].NodeID, firstpssnode.NodeID)
@@ -346,8 +346,11 @@ func TestPssFullSelf(t *testing.T) {
 			return false, ctx.Err()
 		default:
 		}
-		time.Sleep(time.Second)
-		return true, nil
+		
+		// also need to know if the protocolpeer is set up
+		time.Sleep(time.Millisecond * 100)
+		return <- testpeers[ids[0]].successC, nil
+		//return true, nil
 	}
 
 	timeout = 10 * time.Second
@@ -388,7 +391,7 @@ func TestPssSimpleSelf(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId)
+	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
 	ps.Register(name, version, pssprotocol.GetHandler())
 
@@ -495,7 +498,7 @@ func TestPssSimpleRelay(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId)
+	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
 	ps.Register(name, version, pssprotocol.GetHandler())
 
@@ -612,7 +615,7 @@ func TestPssProtocolReply(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId)
+	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
 	ps.Register(name, version, pssprotocol.GetHandler())
 
@@ -713,26 +716,50 @@ func TestPssProtocolReply(t *testing.T) {
 	}
 }
 
-func newPssSimulationTester(t *testing.T, numnodes int, net *simulations.Network, trigger chan *adapters.NodeId, vct *protocols.CodeMap, name string, version int) map[*adapters.NodeId]*pssTestNode {
+// numnodes: how many nodes to create
+// pssnodeidx: on which node indices to start the pss
+// net: the simulated network
+// trigger: hook needed for simulation event reporting
+// vct: codemap for virtual protocol
+// name: name for virtual protocol (and pss topic)
+// version: name for virtual protocol (and pss topic)
+// testpeers: pss-specific peers, with hook needed for simulation event reporting
+
+func newPssSimulationTester(t *testing.T, numnodes int, pssnodeidx []int, net *simulations.Network, trigger chan *adapters.NodeId, vct *protocols.CodeMap, name string, version int, testpeers *map[*adapters.NodeId]*PssTestPeer) map[*adapters.NodeId]*pssTestNode {
 	topic, _ := MakeTopic(name, version)
 	nodes := make(map[*adapters.NodeId]*pssTestNode, numnodes)
 	psss := make(map[*adapters.NodeId]*Pss)
 	net.SetNaf(func(conf *simulations.NodeConfig) adapters.NodeAdapter {
+		var node *pssTestNode
+		var handlefunc func(interface{}) error
 		addr := NewPeerAddrFromNodeId(conf.Id)
 		glog.V(logger.Detail).Infof("Adding sim node oaddr %x uaddr %xx", common.ByteLabel(addr.OverlayAddr()), common.ByteLabel(addr.UnderlayAddr()))
-		handlefunc := makePssHandleProtocol(psss[conf.Id])
-		node := newPssTester(t, psss[conf.Id], addr, 0, handlefunc, net, trigger)
+		if (*testpeers)[conf.Id] != nil {
+			handlefunc = makePssHandleProtocol(psss[conf.Id])
+		} else {
+			handlefunc = makePssHandleForward(psss[conf.Id])
+		}
+		node = newPssTester(t, psss[conf.Id], addr, 0, handlefunc, net, trigger)
 		nodes[conf.Id] = node
 		return node
 	})
 	ids := adapters.RandomNodeIds(numnodes)
-	for _, id := range ids {
+	for i, id := range ids {
 		addr := NewPeerAddrFromNodeId(id)
 		psss[id] = makePss(addr.OverlayAddr(), 0)
-
-		targetprotocol := makeCustomProtocol(name, version, vct, psss[id].NodeId)
-		pssprotocol := NewPssProtocol(psss[id], &topic, vct, targetprotocol)
-		psss[id].Register(name, version, pssprotocol.GetHandler())
+		for _, idx := range pssnodeidx {
+			if idx == i {
+				(*testpeers)[id] = &PssTestPeer{
+					successC: make(chan bool),
+				}
+				glog.V(logger.Detail).Infof("added testpeer (idx %d): %v id %v to map %x", i, (*testpeers)[id], id, testpeers)
+		
+				targetprotocol := makeCustomProtocol(name, version, vct, id, (*testpeers)[id])
+				pssprotocol := NewPssProtocol(psss[id], &topic, vct, targetprotocol)
+				psss[id].Register(name, version, pssprotocol.GetHandler())
+				break
+			}
+		}
 
 		net.NewNode(&simulations.NodeConfig{Id: id})
 		if err := net.Start(id); err != nil {
@@ -802,13 +829,22 @@ func makePss(addr []byte, cachettl time.Duration) *Pss {
 	return ps
 }
 
-func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *adapters.NodeId) *p2p.Protocol {
+func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *adapters.NodeId, testpeer *PssTestPeer) *p2p.Protocol {
 	run := func(p *protocols.Peer) error {
 		glog.V(logger.Detail).Infof("running vprotocol: %v", p)
-		ptp := &PssTestPeer{ // analogous to bzzPeer in the Bzz() protocol constructor
+		/*ptp := &PssTestPeer{ // analogous to bzzPeer in the Bzz() protocol constructor
 			Peer: p,
+			successC: make(chan bool),
+			hasProtocol: true,
+		}*/
+		if testpeer != nil {
+			testpeer.Peer = p
 		}
-		p.Register(&PssTestPayload{}, ptp.SimpleHandlePssPayload)
+		//testpeer.hasProtocol = true
+		
+		//(*testpeers)[id] = ptp
+		//glog.V(logger.Detail).Infof("added testpeer: %v id %v to map %x", (*testpeers)[id], id, testpeers)
+		p.Register(&PssTestPayload{}, testpeer.SimpleHandlePssPayload)
 		err := p.Run()
 		return err
 	}
@@ -854,6 +890,7 @@ func makePssHandleForward(ps *Pss) func(msg interface{}) error {
 		if ps.isSelfRecipient(pssmsg) {
 			glog.V(logger.Debug).Infof("pss for us .. yay!")
 		} else {
+			glog.V(logger.Debug).Infof("passing on pss")
 			return ps.Forward(pssmsg)
 		}
 		return nil
@@ -876,6 +913,7 @@ func makePssHandleProtocol(ps *Pss) func(msg interface{}) error {
 			p := p2p.NewPeer(nid.NodeID, adapters.Name(nid.Bytes()), []p2p.Cap{})
 			return f(umsg, p, env.SenderOAddr)
 		} else {
+			glog.V(logger.Detail).Infof("pss was for someone else :'(")
 			return ps.Forward(pssmsg)
 		}
 		return nil
@@ -892,6 +930,8 @@ func (ptp *PssTestPeer) SimpleHandlePssPayload(msg interface{}) error {
 		pmsg.Data = "pong"
 		glog.V(logger.Detail).Infof("PssTestPayloadhandler reply %v", pmsg)
 		ptp.Send(pmsg)
+	} else if pmsg.Data == "pong" {
+		ptp.successC <- true
 	}
 
 	return nil

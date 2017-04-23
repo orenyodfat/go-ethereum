@@ -334,7 +334,6 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 }
 
 func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
-	glog.V(logger.Detail).Infof("comparing to %x to localaddr %x", msg.To, ps.GetAddr().OverlayAddr())
 	if bytes.Equal(ps.GetMsgRecipient(msg), ps.Overlay.GetAddr().OverlayAddr()) {
 		return true
 	}
