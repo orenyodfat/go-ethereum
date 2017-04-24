@@ -2,6 +2,9 @@ package testing
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 type ProtocolSession struct {
 	TestNodeAdapter
 	Ids []*adapters.NodeId
+	ignore []uint64
 }
 
 type TestMessenger interface {
@@ -65,6 +69,10 @@ func NewProtocolSession(na adapters.NodeAdapter, ids []*adapters.NodeId) *Protoc
 	return ps
 }
 
+func (self *ProtocolSession) SetIgnoreCodes(ignore ...uint64) {
+	self.ignore = ignore
+}
+
 // trigger sends messages from peers
 func (self *ProtocolSession) trigger(trig Trigger) error {
 	peer := self.GetPeer(trig.Peer)
@@ -112,7 +120,7 @@ func (self *ProtocolSession) expect(exp Expect) error {
 	go func() {
 		var err error
 		ignored := true
-		glog.V(logger.Detail).Infof("waiting for msg #%d, %v", exp.Code, exp.Msg)
+		log.Trace("waiting for msg", "code", exp.Code, "msg", exp.Msg)
 		for ignored {
 			ignored = false
 			err = p2p.ExpectMsg(peer, exp.Code, exp.Msg)
@@ -128,15 +136,15 @@ func (self *ProtocolSession) expect(exp Expect) error {
 							if err == nil {
 								if codetoignore == codewegot {
 									ignored = true
-									glog.V(logger.Detail).Infof("ignore msg #%d (expecting #%d)", codewegot, exp.Code)
+									log.Trace("ignore msg with wrong code", "received", codewegot, "expected", exp.Code)
 									break
 								}
 							} else {
-								glog.V(logger.Warn).Infof("expectmsg errormsg parse error?!")
+								log.Warn("expectmsg errormsg parse error?!")
 							}
 						} 
 					} else {
-						glog.V(logger.Warn).Infof("expectmsg errormsg parse error?!")
+						log.Warn("expectmsg errormsg parse error?!")
 						break
 					}
 				}

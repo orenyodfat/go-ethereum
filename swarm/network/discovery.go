@@ -194,7 +194,7 @@ func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {
 	//var err error
 	k.EachLivePeer(nil, 255, func(n Peer, po int) bool {
 		log.Trace(fmt.Sprintf("%T sent to %v", req, n.ID()))
-		err = n.Send(req)
+		err := n.Send(req)
 		if err == nil {
 			i++
 			if i >= broadcastSize {

@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/logger"
-	"github.com/ethereum/go-ethereum/logger/glog"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
@@ -31,9 +30,9 @@ const (
 )
 
 var (
-	errorNoForwarder = errors.New("no available forwarders in routing table")
+	errorNoForwarder   = errors.New("no available forwarders in routing table")
 	errorForwardToSelf = errors.New("forward to self")
-	errorBlockByCache = errors.New("message found in blocking cache")
+	errorBlockByCache  = errors.New("message found in blocking cache")
 )
 
 // Defines params for Pss
@@ -99,7 +98,7 @@ type pssDigest uint32
 
 // pss provides sending messages to nodes without having to be directly connected to them.
 //
-// The messages are wrapped in a PssMsg structure and routed using the swarm kademlia routing. 
+// The messages are wrapped in a PssMsg structure and routed using the swarm kademlia routing.
 // The structure is used by normal incoming message handlers on the nodes to determine which action to take, forward or process.
 // Thus it is up to the implementer to write a handler, and link the PssMsg to this appropriate handler.
 //
@@ -110,16 +109,16 @@ type pssDigest uint32
 // - a collection of remote underlay address, mapped to the overlay addresses above
 // - a method to send a message to specific overlayaddr
 // - a dispatcher lookup, mapping protocols to topics
-// - a message cache to spot messages that previously have been forwarded 
+// - a message cache to spot messages that previously have been forwarded
 type Pss struct {
-	Overlay                                              // we can get the overlayaddress from this
+	Overlay // we can get the overlayaddress from this
 	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
-	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
+	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
 	fwdcache map[pssDigest]time.Time                            // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
 	cachettl time.Duration                                      // how long to keep messages in fwdcache
-	hasher   func(string) storage.Hasher                                          // hasher to digest message to cache
-	lock	 sync.Mutex
+	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
+	lock     sync.Mutex
 }
 
 func (self *Pss) hashMsg(msg *PssMsg) pssDigest {
@@ -139,13 +138,13 @@ func (self *Pss) hashMsg(msg *PssMsg) pssDigest {
 // TODO error check overlay integrity
 func NewPss(k Overlay, params *PssParams) *Pss {
 	return &Pss{
-		Overlay:  k,
+		Overlay: k,
 		//peerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		peerPool: make(map[pot.Address]map[PssTopic]p2p.MsgReadWriter, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
 		fwdcache: make(map[pssDigest]time.Time),
 		cachettl: params.Cachettl,
-		hasher: storage.MakeHashFunc,
+		hasher:   storage.MakeHashFunc,
 	}
 }
 
@@ -189,7 +188,7 @@ func (self *Pss) AddPeer(p *p2p.Peer, addr pot.Address, protocall adapters.Proto
 	self.addPeerTopic(addr, topic, rw)
 	go func() {
 		err := protocall(p, rw)
-		glog.V(logger.Detail).Infof("vprotocol on addr %v topic %v quit: %v", addr, topic, err)
+		log.Warn(fmt.Sprintf("pss vprotocol quit on addr %v topic %v: %v", addr, topic, err))
 	}()
 	return nil
 }
@@ -205,10 +204,7 @@ func (self *Pss) RemovePeer(id pot.Address) {
 func (self *Pss) addPeerTopic(id pot.Address, topic PssTopic, rw p2p.MsgReadWriter) error {
 	if self.peerPool[id][topic] == nil {
 		self.peerPool[id] = make(map[PssTopic]p2p.MsgReadWriter, PssPeerTopicDefaultCapacity)
-	} else {
-		glog.V(logger.Detail).Infof("replacing pss peerpool entry peer '%v' topic '%v'", id, topic)
 	}
-
 	self.peerPool[id][topic] = rw
 	return nil
 }
@@ -258,7 +254,7 @@ func (self *Pss) Forward(msg *PssMsg) error {
 	digest := self.hashMsg(msg)
 
 	if self.checkCache(digest) {
-		glog.V(logger.Detail).Infof("Found in block-cache: PSS-relay msg FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()))
+		log.Trace(fmt.Sprintf("pss relay block-cache match: FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient())))
 		return errorBlockByCache
 	}
 
@@ -271,10 +267,10 @@ func (self *Pss) Forward(msg *PssMsg) error {
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
 	self.Overlay.EachLivePeer(msg.GetRecipient(), 256, func(p Peer, po int) bool {
-		glog.V(logger.Debug).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x (%x)", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), common.ByteLabel(p.UnderlayAddr()))
+		log.Warn(fmt.Sprintf("Attempting PSS-relay FROM %x TO %x THRU %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
 		err := p.Send(msg)
 		if err != nil {
-			glog.V(logger.Warn).Infof("Attempting PSS-relay msg FROM %x TO %x THROUGH %x (%x) FAILED: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), common.ByteLabel(p.UnderlayAddr()), err)
+			log.Warn(fmt.Sprintf("FAILED PSS-relay FROM %x TO %x THRU %x: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), err))
 			return true
 		}
 		sent = true
@@ -306,14 +302,14 @@ type PssReadWriter struct {
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 	msg := <-prw.rw
 
-	glog.V(logger.Detail).Infof("pssrw readmsg %v", msg)
+	log.Trace(fmt.Sprintf("pssrw readmsg: %v", msg))
 
 	return msg, nil
 }
 
 // Implements p2p.MsgWriter
 func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
-	glog.V(logger.Detail).Infof("pssrw writemsg %v", msg)
+	log.Trace(fmt.Sprintf("pssrw writemsg: %v", msg))
 	ifc, found := prw.ct.GetInterface(msg.Code)
 	if !found {
 		return fmt.Errorf("Writemsg couldn't find matching interface for code %d", msg.Code)
@@ -322,8 +318,6 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 
 	to := prw.RecipientOAddr.Bytes()
 
-	glog.V(logger.Detail).Infof("pssrw writemsg %v", msg)
-
 	pmsg, _ := makeMsg(msg.Code, ifc)
 
 	return prw.Pss.Send(to, *prw.topic, pmsg)
@@ -331,7 +325,7 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 
 // Injects a p2p.Msg into the MsgReadWriter, so that it appears on the associated p2p.MsgReader
 func (prw PssReadWriter) injectMsg(msg p2p.Msg) error {
-	glog.V(logger.Detail).Infof("pssrw injectmsg %v", msg)
+	log.Trace(fmt.Sprintf("pssrw injectmsg: %v", msg))
 	prw.rw <- msg
 	return nil
 }
@@ -384,7 +378,7 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 		ReceivedAt: time.Now(),
 		Payload:    bytes.NewBuffer(payload.Data),
 	}
-	
+
 	vrw := self.Pss.peerPool[hashoaddr][*self.topic].(*PssReadWriter)
 	vrw.injectMsg(pmsg)
 
