@@ -110,8 +110,7 @@ func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.
 	//self.dbAccess = network.NewDbAccess(self.lstore)
 	glog.V(logger.Debug).Infof("Set up local db access (iterator/counter)")
 	
-	kp := &network.KadParams{
-	}
+	kp := network.NewKadParams()
 	
 	to := network.NewKademlia(
 		common.FromHex(config.BzzKey),
@@ -216,7 +215,7 @@ func (self *Swarm) Start(net *p2p.Server) error {
 
 	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
 
-	self.na = adapters.NewRLPx(nid[:], net)
+	//self.na = adapters.NewRLPx(nid[:], net)
 
 	if self.pssEnabled {
 		self.pss = network.NewPss(self.hive.Overlay)

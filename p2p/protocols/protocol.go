@@ -236,16 +236,6 @@ func (self *Peer) Register(msg interface{}, handler func(interface{}) error) uin
 	return code
 }
 
-// gets the handler function for the message struct
-func (self *Peer) GetHandlers(msg interface{}) []func(interface{}) error {
-	typ := reflect.TypeOf(msg)
-	_, found := self.ct.messages[typ]
-	if !found {
-		panic(fmt.Sprintf("message type '%v' unknown ", typ))
-	}
-	return self.handlers[typ]
-}
-
 // Run starts the forever loop that handles incoming messages
 // called within the p2p.Protocol#Run function
 func (self *Peer) Run() error {

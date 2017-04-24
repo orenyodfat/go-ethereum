@@ -113,8 +113,7 @@ func TestPssCache(t *testing.T) {
 	topic, _ := MakeTopic(protocolName, protocolVersion)
 	data := []byte("foo")
 	msg := &PssMsg{
-		To: to,
-		Payload: PssEnvelope{
+		Payload: pssEnvelope{
 			TTL:         0,
 			SenderOAddr: oaddr,
 			SenderUAddr: uaddr,
@@ -122,10 +121,10 @@ func TestPssCache(t *testing.T) {
 			Payload:     data,
 		},
 	}
+	msg.SetRecipient(to)
 
 	msgtwo := &PssMsg{
-		To: to,
-		Payload: PssEnvelope{
+		Payload: pssEnvelope{
 			TTL:         0,
 			SenderOAddr: uaddr,
 			SenderUAddr: oaddr,
@@ -133,6 +132,7 @@ func TestPssCache(t *testing.T) {
 			Payload:     data,
 		},
 	}
+	msgtwo.SetRecipient(to)
 
 	digest := ps.hashMsg(msg)
 	digesttwo := ps.hashMsg(msgtwo)
@@ -165,27 +165,30 @@ func TestPssCache(t *testing.T) {
 }
 
 func TestPssRegisterHandler(t *testing.T) {
+	var topic PssTopic
 	var err error
 	addr := RandomAddr()
 	ps := makePss(addr.UnderlayAddr(), 0)
-
-	err = ps.Register("foo", 42, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
+	
+	topic, _ = MakeTopic(protocolName, protocolVersion)
+	err = ps.Register(topic, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
 	if err != nil {
 		t.Fatalf("couldnt register protocol 'foo' v 42: %v", err)
 	}
-	err = ps.Register("abcdefghiljklmnopqrstuvxyz0123456789", 65536, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
+	
+	topic, _ = MakeTopic(protocolName, protocolVersion)
+	err = ps.Register(topic, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
 	if err == nil {
 		t.Fatalf("register protocol 'abc..789' v 65536 should have failed")
 	}
 }
 
-// pss integrity tests
 func TestPssAddSingleHandler(t *testing.T) {
 
 	addr := RandomAddr()
 
 	//ps := newPssBase(t, name, version, addr)
-	ps := makePss(addr.UnderlayAddr(), 0)
+	ps := makePss(addr.OverlayAddr(), 0)
 	vct := protocols.NewCodeMap(protocolName, uint(protocolVersion), 65535, &PssTestPayload{})
 
 	// topic will be the mapping in pss used to dispatch to the proper handler
@@ -195,9 +198,9 @@ func TestPssAddSingleHandler(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(protocolName, protocolVersion, vct, ps.NodeId, nil)
+	targetprotocol := makeCustomProtocol(protocolName, protocolVersion, vct, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
-	ps.Register(protocolName, protocolVersion, pssprotocol.GetHandler())
+	ps.Register(topic, pssprotocol.GetHandler())
 
 	handlefunc := makePssHandleForward(ps)
 
@@ -325,7 +328,7 @@ func TestPssFullSelf(t *testing.T) {
 
 	action = func(ctx context.Context) error {
 		code, _ := vct.GetCode(&PssTestPayload{})
-		msgbytes, _ := MakeMsg(code, &PssTestPayload{
+		msgbytes, _ := makeMsg(code, &PssTestPayload{
 			Data: "ping",
 		})
 
@@ -381,7 +384,7 @@ func TestPssSimpleSelf(t *testing.T) {
 	senderaddr := RandomAddr()
 
 	//ps := newPssBase(t, name, version, addr)
-	ps := makePss(addr.UnderlayAddr(), 0)
+	ps := makePss(addr.OverlayAddr(), 0)
 	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &PssTestPayload{})
 
 	// topic will be the mapping in pss used to dispatch to the proper handler
@@ -391,9 +394,9 @@ func TestPssSimpleSelf(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
+	targetprotocol := makeCustomProtocol(name, version, vct, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
-	ps.Register(name, version, pssprotocol.GetHandler())
+	ps.Register(topic, pssprotocol.GetHandler())
 
 	handlefunc := makePssHandleForward(ps)
 
@@ -488,7 +491,7 @@ func TestPssSimpleRelay(t *testing.T) {
 	senderaddr := RandomAddr()
 
 	//ps := newPssBase(t, name, version, addr)
-	ps := makePss(addr.UnderlayAddr(), 0)
+	ps := makePss(addr.OverlayAddr(), 0)
 	vct := protocols.NewCodeMap(name, uint(version), 65535, &PssTestPayload{})
 
 	// topic will be the mapping in pss used to dispatch to the proper handler
@@ -498,9 +501,9 @@ func TestPssSimpleRelay(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
+	targetprotocol := makeCustomProtocol(name, version, vct, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
-	ps.Register(name, version, pssprotocol.GetHandler())
+	ps.Register(topic, pssprotocol.GetHandler())
 
 	handlefunc := makePssHandleForward(ps)
 
@@ -604,7 +607,7 @@ func TestPssProtocolReply(t *testing.T) {
 	senderaddr := RandomAddr()
 
 	//ps := newPssBase(t, name, version, addr)
-	ps := makePss(addr.UnderlayAddr(), 0)
+	ps := makePss(addr.OverlayAddr(), 0)
 	vct := protocols.NewCodeMap(name, uint(version), 65535, &PssTestPayload{})
 
 	// topic is used as a mapping in pss used to dispatch to the proper handler for the pssmsg payload
@@ -615,9 +618,9 @@ func TestPssProtocolReply(t *testing.T) {
 	// this is the protocols.Protocol that we want to be made accessible through Pss
 	// set up the protocol mapping to pss, and register it for this topic
 	// this is an optional step, we are not forcing to use protocols in the handling of pss, it might be anything
-	targetprotocol := makeCustomProtocol(name, version, vct, ps.NodeId, nil)
+	targetprotocol := makeCustomProtocol(name, version, vct, nil)
 	pssprotocol := NewPssProtocol(ps, &topic, vct, targetprotocol)
-	ps.Register(name, version, pssprotocol.GetHandler())
+	ps.Register(topic, pssprotocol.GetHandler())
 
 	handlefunc := makePssHandleProtocol(ps)
 
@@ -754,9 +757,9 @@ func newPssSimulationTester(t *testing.T, numnodes int, pssnodeidx []int, net *s
 				}
 				glog.V(logger.Detail).Infof("added testpeer (idx %d): %v id %v to map %x", i, (*testpeers)[id], id, testpeers)
 		
-				targetprotocol := makeCustomProtocol(name, version, vct, id, (*testpeers)[id])
+				targetprotocol := makeCustomProtocol(name, version, vct, (*testpeers)[id])
 				pssprotocol := NewPssProtocol(psss[id], &topic, vct, targetprotocol)
-				psss[id].Register(name, version, pssprotocol.GetHandler())
+				psss[id].Register(topic, pssprotocol.GetHandler())
 				break
 			}
 		}
@@ -810,12 +813,6 @@ func newPssTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handle
 
 func newPssProtocolTester(t *testing.T, ps *Pss, addr *peerAddr, numsimnodes int, handlefunc func(interface{}) error) (*p2ptest.ProtocolTester, *protocols.CodeMap) {
 	testnode := newPssTester(t, ps, addr, numsimnodes, handlefunc, nil, nil)
-	/*protocall := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-		glog.V(logger.Detail).Infof("in protocall peer %v rw %v", p, rw)
-		discreason := p.Run()
-		return fmt.Errorf("%v", discreason.String())
-	}*/
-	//ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, protocall)
 	ptt := p2ptest.NewProtocolTester(t, NodeId(addr), numsimnodes, testnode.ProtoCall())
 	return ptt, testnode.ct
 }
@@ -824,26 +821,20 @@ func makePss(addr []byte, cachettl time.Duration) *Pss {
 	kp := NewKadParams()
 	kp.MinProxBinSize = 3
 
+	pp := NewPssParams()
+	pp.Cachettl = cachettl
+	
 	overlay := NewKademlia(addr, kp)
-	ps := NewPss(overlay, cachettl)
+	ps := NewPss(overlay, pp)
 	return ps
 }
 
-func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *adapters.NodeId, testpeer *PssTestPeer) *p2p.Protocol {
+func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, testpeer *PssTestPeer) *p2p.Protocol {
 	run := func(p *protocols.Peer) error {
 		glog.V(logger.Detail).Infof("running vprotocol: %v", p)
-		/*ptp := &PssTestPeer{ // analogous to bzzPeer in the Bzz() protocol constructor
-			Peer: p,
-			successC: make(chan bool),
-			hasProtocol: true,
-		}*/
 		if testpeer != nil {
 			testpeer.Peer = p
 		}
-		//testpeer.hasProtocol = true
-		
-		//(*testpeers)[id] = ptp
-		//glog.V(logger.Detail).Infof("added testpeer: %v id %v to map %x", (*testpeers)[id], id, testpeers)
 		p.Register(&PssTestPayload{}, testpeer.SimpleHandlePssPayload)
 		err := p.Run()
 		return err
@@ -852,7 +843,6 @@ func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, id *ada
 	return protocols.NewProtocol(name, uint(version), run, ct, nil, nil)
 }
 
-// does exactly what it says
 func makeFakeMsg(ps *Pss, ct *protocols.CodeMap, topic PssTopic, senderaddr PeerAddr, content string) PssMsg {
 	data := PssTestPayload{}
 	code, found := ct.GetCode(&data)
@@ -862,12 +852,12 @@ func makeFakeMsg(ps *Pss, ct *protocols.CodeMap, topic PssTopic, senderaddr Peer
 
 	data.Data = content
 
-	rlpbundle, err := MakeMsg(code, data)
+	rlpbundle, err := makeMsg(code, data)
 	if err != nil {
 		return PssMsg{}
 	}
 
-	pssenv := PssEnvelope{
+	pssenv := pssEnvelope{
 		SenderOAddr: senderaddr.OverlayAddr(),
 		SenderUAddr: senderaddr.UnderlayAddr(),
 		Topic:       topic,
@@ -875,10 +865,10 @@ func makeFakeMsg(ps *Pss, ct *protocols.CodeMap, topic PssTopic, senderaddr Peer
 		Payload:     rlpbundle,
 	}
 	pssmsg := PssMsg{
-		To:      ps.Overlay.GetAddr().OverlayAddr(),
 		Payload: pssenv,
 	}
-
+	pssmsg.SetRecipient(ps.Overlay.GetAddr().OverlayAddr())
+	
 	return pssmsg
 }
 
