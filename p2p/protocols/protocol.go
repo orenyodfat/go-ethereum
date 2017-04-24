@@ -32,7 +32,6 @@ package protocols
 import (
 	"fmt"
 	"reflect"
-	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -277,22 +276,8 @@ func (self *Peer) Send(msg interface{}) error {
 		return errorf(ErrInvalidMsgType, "%v", code)
 	}
 	log.Trace(fmt.Sprintf("=> msg #%d TO %v : %v", code, self.ID(), msg))
-	go func() {
-		self.wErrc <- p2p.Send(self.rw, uint64(code), msg)
-	}()
-	var err error
-	select {
-	case err = <-self.wErrc:
-		if err == nil {
-			return nil
-		}
-	case <-time.NewTimer(3000 * time.Millisecond).C:
-		err = fmt.Errorf("write timeout")
-		panic(err)
-	}
-	err = errorf(ErrWrite, "(msg code: %v): %v", code, err)
-	self.Drop(err)
-	return err
+	go p2p.Send(self.rw, uint64(code), msg)
+	return nil
 }
 
 func (self *Peer) DisconnectHook(f func(error)) {

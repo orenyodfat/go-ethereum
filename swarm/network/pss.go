@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ const (
 	digestLength                = 64
 	digestCapacity              = 256
 	defaultDigestCacheTTL       = time.Second
+)
+
+var (
+	errorNoForwarder = errors.New("no available forwarders in routing table")
+	errorForwardToSelf = errors.New("forward to self")
+	errorBlockByCache = errors.New("message found in blocking cache")
 )
 
 // Defines params for Pss
@@ -177,6 +184,8 @@ func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) erro
 //
 // The effect is that now we have a "virtual" protocol running on an artificial p2p.Peer, which can be looked up and piped to through Pss using swarm overlay address and topic
 func (self *Pss) AddPeer(p *p2p.Peer, addr pot.Address, protocall adapters.ProtoCall, topic PssTopic, rw p2p.MsgReadWriter) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 	self.addPeerTopic(addr, topic, rw)
 	go func() {
 		err := protocall(p, rw)
@@ -187,6 +196,8 @@ func (self *Pss) AddPeer(p *p2p.Peer, addr pot.Address, protocall adapters.Proto
 
 // Removes a pss peer from the pss peerpool
 func (self *Pss) RemovePeer(id pot.Address) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 	self.peerPool[id] = nil
 	return
 }
@@ -241,15 +252,14 @@ func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
 func (self *Pss) Forward(msg *PssMsg) error {
 
 	if self.isSelfRecipient(msg) {
-		return newPssError(pssError_ForwardToSelf)
+		return errorForwardToSelf
 	}
 
 	digest := self.hashMsg(msg)
 
 	if self.checkCache(digest) {
 		glog.V(logger.Detail).Infof("Found in block-cache: PSS-relay msg FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()))
-		return nil
-		//return newPssError(pssError_BlockByCache)
+		return errorBlockByCache
 	}
 
 	self.addToFwdCache(digest)

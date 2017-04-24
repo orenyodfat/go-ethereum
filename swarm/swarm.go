@@ -199,13 +199,7 @@ func (self *Swarm) Start(net *p2p.Server) error {
 
 	log.Warn(fmt.Sprintf("Starting Swarm service"))
 	
-	nid := discover.PubkeyID(&net.PrivateKey.PublicKey)
 	glog.V(logger.Warn).Infof("Starting Swarm service")
-	/*self.hive.Start(
-		nid,
-		func() string { return net.ListenAddr },
-		connectPeer,
-	)*/
 	self.hive.Start(
 		connectPeer,
 		func () <-chan time.Time{
@@ -215,10 +209,9 @@ func (self *Swarm) Start(net *p2p.Server) error {
 
 	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
 
-	//self.na = adapters.NewRLPx(nid[:], net)
-
 	if self.pssEnabled {
-		self.pss = network.NewPss(self.hive.Overlay)
+		pssparams := network.NewPssParams()
+		self.pss = network.NewPss(self.hive.Overlay, pssparams)
 		glog.V(logger.Info).Infof("Pss started: %v", self.pss)
 	}
 	

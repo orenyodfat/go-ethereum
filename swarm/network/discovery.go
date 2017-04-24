@@ -53,7 +53,7 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 	resp := &peersMsg{
 		Peers: []*peerAddr{&peerAddr{OAddr: p.OverlayAddr(), UAddr: p.UnderlayAddr()}}, // perhaps the PeerAddr interface is unnecessary generalization
 	}
-	go self.Send(resp)
+	self.Send(resp)
 	//return err
 	return nil
 }
@@ -63,7 +63,7 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 // or first empty row)
 // callback for overlay driver
 func (self *discPeer) NotifyProx(po uint8) error {
-	go self.Send(&subPeersMsg{ProxLimit: po})
+	self.Send(&subPeersMsg{ProxLimit: po})
 	//return err
 	return nil
 }
@@ -129,7 +129,7 @@ func (self *discPeer) handleSubPeersMsg(msg interface{}) error {
 		})
 		log.Warn(fmt.Sprintf("found initial %v peers not farther than %v", len(peers), self.proxLimit))
 		if len(peers) > 0 {
-			go self.Send(&peersMsg{Peers: peers})
+			self.Send(&peersMsg{Peers: peers})
 		}
 	}
 	self.sentPeers = true
@@ -181,7 +181,7 @@ func (self *discPeer) handleGetPeersMsg(msg interface{}) error {
 	resp := &peersMsg{
 		Peers: peers,
 	}
-	go self.Send(resp)
+	self.Send(resp)
 	return nil 
 }
 
