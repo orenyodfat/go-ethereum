@@ -90,7 +90,7 @@ type pssPayload struct {
 
 // Pre-Whisper placeholder
 type pssCacheEntry struct {
-	expiresAt time.Time
+	expiresAt    time.Time
 	receivedFrom []byte
 }
 
@@ -121,7 +121,7 @@ type Pss struct {
 	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
-	fwdcache map[pssDigest]pssCacheEntry                            // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
+	fwdcache map[pssDigest]pssCacheEntry                        // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
 	cachettl time.Duration                                      // how long to keep messages in fwdcache
 	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
 	lock     sync.Mutex
@@ -169,8 +169,7 @@ func (self *Pss) addFwdCacheSender(addr []byte, digest pssDigest) error {
 	var entry pssCacheEntry
 	var ok bool
 	if entry, ok = self.fwdcache[digest]; !ok {
-		entry = pssCacheEntry{
-		}
+		entry = pssCacheEntry{}
 	}
 	entry.receivedFrom = addr
 	self.fwdcache[digest] = entry
@@ -183,8 +182,7 @@ func (self *Pss) addFwdCacheExpire(digest pssDigest) error {
 	var entry pssCacheEntry
 	var ok bool
 	if entry, ok = self.fwdcache[digest]; !ok {
-		entry = pssCacheEntry{
-		}
+		entry = pssCacheEntry{}
 	}
 	entry.expiresAt = time.Now().Add(self.cachettl)
 	self.fwdcache[digest] = entry
@@ -305,11 +303,11 @@ func (self *Pss) Forward(msg *PssMsg) error {
 
 	// TODO:check integrity of message
 
-	sent := false
+	sent := 0
 
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
-	self.Overlay.EachLivePeer(msg.GetRecipient(), 256, func(p Peer, po int) bool {
+	self.Overlay.EachLivePeer(msg.GetRecipient(), 256, func(p Peer, po int, isproxbin bool) bool {
 		if self.checkFwdCache(p.OverlayAddr(), digest) {
 			log.Warn(fmt.Sprintf("BOUNCE DEFER PSS-relay FROM %x TO %x THRU %x:", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
 			return true
@@ -320,12 +318,17 @@ func (self *Pss) Forward(msg *PssMsg) error {
 			log.Warn(fmt.Sprintf("FAILED PSS-relay FROM %x TO %x THRU %x: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), err))
 			return true
 		}
-		sent = true
-		self.addFwdCacheExpire(digest)
-		return false
+		sent++
+		if bytes.Equal(msg.GetRecipient(), p.OverlayAddr()) || !isproxbin {
+			return false
+		}
+		log.Trace(fmt.Sprintf("%x is in proxbin, so we continue sending", common.ByteLabel(p.OverlayAddr())))
+		return true
 	})
-	if !sent {
-		return fmt.Errorf("PSS Was not able to send to any peers")
+	if sent == 0 {
+		log.Warn("PSS Was not able to send to any peers")
+	} else {
+		self.addFwdCacheExpire(digest)
 	}
 
 	return nil

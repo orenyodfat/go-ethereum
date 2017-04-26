@@ -44,7 +44,7 @@ type Overlay interface {
 	On(Peer)
 	Off(Peer)
 
-	EachLivePeer([]byte, int, func(Peer, int) bool)
+	EachLivePeer([]byte, int, func(Peer, int, bool) bool)
 	EachPeer([]byte, int, func(PeerAddr, int) bool)
 
 	SuggestPeer() (PeerAddr, int, bool)

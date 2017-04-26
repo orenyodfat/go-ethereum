@@ -119,7 +119,7 @@ func (self *discPeer) handleSubPeersMsg(msg interface{}) error {
 	self.proxLimit = spm.ProxLimit
 	if !self.sentPeers {
 		var peers []*peerAddr
-		self.overlay.EachLivePeer(self.OverlayAddr(), 255, func(p Peer, po int) bool {
+		self.overlay.EachLivePeer(self.OverlayAddr(), 255, func(p Peer, po int, isproxbin bool) bool {
 			if uint8(po) < self.proxLimit {
 				return false
 			}
@@ -165,7 +165,7 @@ func (self *discPeer) handleGetPeersMsg(msg interface{}) error {
 	var peers []*peerAddr
 	req := msg.(*getPeersMsg)
 	i := 0
-	self.overlay.EachLivePeer(self.OverlayAddr(), int(req.Order), func(n Peer, po int) bool {
+	self.overlay.EachLivePeer(self.OverlayAddr(), int(req.Order), func(n Peer, po int, isproxbin bool) bool {
 		i++
 		// only send peers we have not sent before in this session
 		if self.seen(n) {
@@ -182,7 +182,7 @@ func (self *discPeer) handleGetPeersMsg(msg interface{}) error {
 		Peers: peers,
 	}
 	self.Send(resp)
-	return nil 
+	return nil
 }
 
 func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {
@@ -192,7 +192,7 @@ func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {
 	}
 	var i uint8
 	//var err error
-	k.EachLivePeer(nil, 255, func(n Peer, po int) bool {
+	k.EachLivePeer(nil, 255, func(n Peer, po int, isproxbin bool) bool {
 		log.Trace(fmt.Sprintf("%T sent to %v", req, n.ID()))
 		err := n.Send(req)
 		if err == nil {
