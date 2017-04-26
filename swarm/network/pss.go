@@ -150,12 +150,16 @@ func NewPss(k Overlay, params *PssParams) *Pss {
 
 // when full oldest out, we should periodically clean cache
 func (self *Pss) addToFwdCache(digest pssDigest) error {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 	self.fwdcache[digest] = time.Now().Add(self.cachettl)
 	return nil
 }
 
 // returns true if in cache AND not expired
 func (self *Pss) checkCache(digest pssDigest) bool {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 	entry, ok := self.fwdcache[digest]
 	if !ok || entry.Before(time.Now()) {
 		return false
@@ -255,7 +259,8 @@ func (self *Pss) Forward(msg *PssMsg) error {
 
 	if self.checkCache(digest) {
 		log.Trace(fmt.Sprintf("pss relay block-cache match: FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient())))
-		return errorBlockByCache
+		//return errorBlockByCache
+		return nil
 	}
 
 	self.addToFwdCache(digest)
