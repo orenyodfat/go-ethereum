@@ -294,12 +294,15 @@ var action func(ctx context.Context) error
 	}
 	cancel()
 
-	trigger = make(chan *adapters.NodeId)
-
+	// ensure that we didn't get lost in concurrency issues
 	if len(fullnodes) != numfullnodes {
 		t.Fatalf("corrupt fullnodes array, expected %d, have %d", numfullnodes, len(fullnodes))
 	}
 	
+	// ensure that the channel is clean
+	trigger = make(chan *adapters.NodeId)
+
+	// randomly decide which nodes to send to and from
 	rand.Seed(time.Now().Unix())
 	for i = 0; i < numsends; i++ {
 		s := rand.Int() % numfullnodes
@@ -312,6 +315,7 @@ var action func(ctx context.Context) error
 		sends = append(sends, s, r) 
 	}
 	
+	// distinct array of nodes to expect on
 	for k, _ := range expectnodes {
 		expectnodesids = append(expectnodesids, k)
 	}
@@ -319,6 +323,7 @@ var action func(ctx context.Context) error
 	// wait a bit for the kademlia to fill up
 	time.Sleep(time.Second)
 	
+	// send and monitor receive of pss
 	action = func(ctx context.Context) error {
 		code, _ := vct.GetCode(&PssTestPayload{})
 		
@@ -355,6 +360,8 @@ var action func(ctx context.Context) error
 		}
 		return nil
 	}
+	
+	// results
 	check = func(ctx context.Context, id *adapters.NodeId) (bool, error) {
 		select {
 			case <-ctx.Done():
