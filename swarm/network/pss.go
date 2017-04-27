@@ -326,7 +326,7 @@ func (self *Pss) Forward(msg *PssMsg) error {
 		return true
 	})
 	if sent == 0 {
-		log.Warn("PSS Was not able to send to any peers")
+		return fmt.Errorf("PSS Was not able to send to any peers")
 	} else {
 		self.addFwdCacheExpire(digest)
 	}
@@ -371,7 +371,9 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 
 	pmsg, _ := makeMsg(msg.Code, ifc)
 
-	return prw.Pss.Send(to, *prw.topic, pmsg)
+	prw.Pss.Send(to, *prw.topic, pmsg)
+	
+	return nil
 }
 
 // Injects a p2p.Msg into the MsgReadWriter, so that it appears on the associated p2p.MsgReader

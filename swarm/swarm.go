@@ -108,7 +108,7 @@ func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.
 	//glog.V(logger.Debug).Infof("Set up local storage")
 
 	//self.dbAccess = network.NewDbAccess(self.lstore)
-	glog.V(logger.Debug).Infof("Set up local db access (iterator/counter)")
+	log.Debug("Set up local db access (iterator/counter)")
 	
 	kp := network.NewKadParams()
 	
@@ -129,7 +129,7 @@ func NewSwarm(ctx *node.ServiceContext, backend chequebook.Backend, config *api.
 	
 	// setup cloud storage internal access layer
 	self.storage = storage.NewNetStore(hash, self.lstore, nil, config.StoreParams)
-	glog.V(logger.Debug).Infof("-> swarm net store shared access layer to Swarm Chunk Store")
+	log.Debug("-> swarm net store shared access layer to Swarm Chunk Store")
 
 	// set up Depo (storage handler = cloud storage access layer for incoming remote requests)
 	// self.depo = network.NewDepo(hash, self.lstore, self.storage)
@@ -198,8 +198,6 @@ func (self *Swarm) Start(net *p2p.Server) error {
 	}
 
 	log.Warn(fmt.Sprintf("Starting Swarm service"))
-	
-	glog.V(logger.Warn).Infof("Starting Swarm service")
 	self.hive.Start(
 		connectPeer,
 		func () <-chan time.Time{
@@ -207,12 +205,12 @@ func (self *Swarm) Start(net *p2p.Server) error {
 		},
 	)
 
-	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.Addr()))
+	log.Info(fmt.Sprintf("Swarm network started on bzz address: %v", self.hive.GetAddr()))
 
 	if self.pssEnabled {
 		pssparams := network.NewPssParams()
 		self.pss = network.NewPss(self.hive.Overlay, pssparams)
-		glog.V(logger.Info).Infof("Pss started: %v", self.pss)
+		log.Debug("Pss started: %v", self.pss)
 	}
 	
 	self.dpa.Start()
@@ -267,7 +265,7 @@ func (self *Swarm) Protocols() []p2p.Protocol {
 	srv := func(p network.Peer) error {
 		if self.pssEnabled {
 			//p.Register(&PssMsg{}, self.pssFunc)
-			glog.V(logger.Warn).Infof("pss is enabled, but handler not yet implemented - it won't work yet, sorry")
+			log.Warn("pss is enabled, but handler not yet implemented - it won't work yet, sorry")
 		}
 		self.hive.Add(p)
 		p.DisconnectHook(func(err error) {
@@ -291,7 +289,8 @@ func (self *Swarm) Protocols() []p2p.Protocol {
 // implements node.Service
 // Apis returns the RPC Api descriptors the Swarm implementation offers
 func (self *Swarm) APIs() []rpc.API {
-	return []rpc.API{
+
+	apis := []rpc.API{
 		// public APIs
 		{
 			Namespace: "bzz",
@@ -334,6 +333,17 @@ func (self *Swarm) APIs() []rpc.API {
 		},
 		// {Namespace, Version, api.NewAdmin(self), false},
 	}
+
+	if self.pssEnabled {
+		apis = append(apis, rpc.API{
+			Namespace: "eth",
+			Version:	"0.1/pss",
+			Service:	api.NewPssApi(self.pss),
+			Public:		true,
+		})
+	}
+		
+	return apis
 }
 
 func (self *Swarm) Api() *api.Api {

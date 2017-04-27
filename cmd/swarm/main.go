@@ -116,6 +116,7 @@ var (
 	SwarmUploadMimeType = cli.StringFlag{
 		Name:  "mime",
 		Usage: "force mime type",
+	}
 	PssEnabledFlag = cli.BoolFlag{
 		Name: "pss",
 		Usage: "Enable pss (message passing over swarm)",
@@ -300,12 +301,16 @@ func version(ctx *cli.Context) error {
 
 func bzzd(ctx *cli.Context) error {
 	cfg := defaultNodeConfig
+	if ctx.GlobalIsSet(PssEnabledFlag.Name) {
+		cfg.WSHost = "127.0.0.1"
+		cfg.WSModules = []string{"eth","pss"}
+		cfg.WSOrigins = []string{"*"}
+	}
 	utils.SetNodeConfig(ctx, &cfg)
 	stack, err := node.New(&cfg)
 	if err != nil {
 		utils.Fatalf("can't create node: %v", err)
 	}
-
 	registerBzzService(ctx, stack)
 	utils.StartNode(stack)
 
