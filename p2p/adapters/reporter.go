@@ -14,21 +14,31 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package api
+package adapters
 
 import (
-	"github.com/ethereum/go-ethereum/swarm/network"
+// "fmt"
+// "net"
+
+// "github.com/ethereum/go-ethereum/p2p"
+// "github.com/ethereum/go-ethereum/p2p/discover"
 )
 
-type Control struct {
-	api  *Api
-	hive *network.Hive
+type RemoteReporter struct {
 }
 
-func NewControl(api *Api, hive *network.Hive) *Control {
-	return &Control{api, hive}
+func NewRemoteReporter(url string) *RemoteReporter {
+	return &RemoteReporter{}
 }
 
-func (self *Control) Hive() string {
-	return self.hive.String()
+func (self *RemoteReporter) DidConnect(source, target *NodeId) {
+	self.post(true)
+}
+
+func (self *RemoteReporter) DidDisconnect(source, target *NodeId) {
+	self.post(true)
+}
+
+func (self *RemoteReporter) post(interface{}) {
+
 }

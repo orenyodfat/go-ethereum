@@ -1,4 +1,4 @@
-// Copyright 2016 The go-ethereum Authors
+// Copyright 2017 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -13,15 +13,26 @@
 //
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
-
-package kademlia
+package pot
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
+)
+
+var (
+	zeroAddr = &common.Hash{}
+	zerosHex = zeroAddr.Hex()[2:]
+	zerosBin = Address{}.Bin()
+)
+
+var (
+	addrlen = keylen
 )
 
 type Address common.Hash
@@ -41,11 +52,19 @@ func (a *Address) UnmarshalJSON(value []byte) error {
 
 // the string form of the binary representation of an address (only first 8 bits)
 func (a Address) Bin() string {
+	return ToBin(a[:])
+}
+
+func ToBin(a []byte) string {
 	var bs []string
-	for _, b := range a[:] {
+	for _, b := range a {
 		bs = append(bs, fmt.Sprintf("%08b", b))
 	}
 	return strings.Join(bs, "")
+}
+
+func (a Address) Bytes() []byte {
+	return a[:]
 }
 
 /*
@@ -63,16 +82,29 @@ binary representation of the x^y.
 
 (0 farthest, 255 closest, 256 self)
 */
-func proximity(one, other Address) (ret int) {
-	for i := 0; i < len(one); i++ {
+func proximity(one, other Address) (ret int, eq bool) {
+	return posProximity(one, other, 0)
+}
+
+// posProximity(a, b, pos) returns proximity order of b wrt a (symmetric) pretending
+// the first pos bits match, checking only bits kzindex >= pos
+func posProximity(one, other Address, pos int) (ret int, eq bool) {
+	for i := pos / 8; i < len(one); i++ {
+		if one[i] == other[i] {
+			continue
+		}
 		oxo := one[i] ^ other[i]
-		for j := 0; j < 8; j++ {
+		start := 0
+		if i == pos/8 {
+			start = pos % 8
+		}
+		for j := start; j < 8; j++ {
 			if (uint8(oxo)>>uint8(7-j))&0x01 != 0 {
-				return i*8 + j
+				return i*8 + j, false
 			}
 		}
 	}
-	return len(one) * 8
+	return len(one) * 8, true
 }
 
 // Address.ProxCmp compares the distances a->target and b->target.
@@ -96,7 +128,7 @@ func (target Address) ProxCmp(a, b Address) int {
 // if prox is negative a random address is generated
 func RandomAddressAt(self Address, prox int) (addr Address) {
 	addr = self
-	var pos int
+	pos := -1
 	if prox >= 0 {
 		pos = prox / 8
 		trans := prox % 8
@@ -118,18 +150,18 @@ func RandomAddressAt(self Address, prox int) (addr Address) {
 
 // KeyRange(a0, a1, proxLimit) returns the address inclusive address
 // range that contain addresses closer to one than other
-func KeyRange(one, other Address, proxLimit int) (start, stop Address) {
-	prox := proximity(one, other)
-	if prox >= proxLimit {
-		prox = proxLimit
-	}
-	start = CommonBitsAddrByte(one, other, byte(0x00), prox)
-	stop = CommonBitsAddrByte(one, other, byte(0xff), prox)
-	return
-}
+// func KeyRange(one, other Address, proxLimit int) (start, stop Address) {
+// 	prox := proximity(one, other)
+// 	if prox >= proxLimit {
+// 		prox = proxLimit
+// 	}
+// 	start = CommonBitsAddrByte(one, other, byte(0x00), prox)
+// 	stop = CommonBitsAddrByte(one, other, byte(0xff), prox)
+// 	return
+// }
 
 func CommonBitsAddrF(self, other Address, f func() byte, p int) (addr Address) {
-	prox := proximity(self, other)
+	prox, _ := proximity(self, other)
 	var pos int
 	if p <= prox {
 		prox = p
@@ -170,4 +202,88 @@ func CommonBitsAddrByte(self, other Address, b byte, prox int) (addr Address) {
 // randomAddressAt() generates a random address
 func RandomAddress() Address {
 	return RandomAddressAt(Address{}, -1)
+}
+
+// wraps an Address to implement the PotVal interface
+type HashAddress struct {
+	Address
+}
+
+func (a *HashAddress) String() string {
+	return a.Address.Bin()
+}
+
+func NewAddressFromString(s string) []byte {
+	ha := [32]byte{}
+
+	t := s + string(zerosBin)[:len(zerosBin)-len(s)]
+	for i := 0; i < 4; i++ {
+		n, err := strconv.ParseUint(t[i*64:(i+1)*64], 2, 64)
+		if err != nil {
+			panic("wrong format: " + err.Error())
+		}
+		binary.BigEndian.PutUint64(ha[i*8:(i+1)*8], uint64(n))
+	}
+	return ha[:]
+}
+
+func NewHashAddress(s string) *HashAddress {
+	ha := NewAddressFromString(s)
+	h := common.Hash{}
+	copy(h[:], ha)
+	return &HashAddress{Address(h)}
+}
+
+func NewHashAddressFromBytes(b []byte) *HashAddress {
+	h := common.Hash{}
+	copy(h[:], b)
+	return &HashAddress{Address(h)}
+}
+
+// PO(addr, pos) return the proximity order of addr wrt to
+// the pinned address of the tree
+// assuming it is greater than or  equal to pos
+func (self *HashAddress) PO(val PotVal, pos int) (po int, eq bool) {
+	return posProximity(self.Address, val.(*HashAddress).Address, pos)
+}
+
+type BoolAddress struct {
+	addr []bool
+}
+
+func NewBoolAddress(s string) *BoolAddress {
+	return NewBoolAddressXOR(s, zerosBin[:len(s)])
+}
+
+func NewBoolAddressXOR(s, t string) *BoolAddress {
+	if len(s) != len(t) {
+		panic("lengths do not match")
+	}
+	addr := make([]bool, len(s))
+	for i, _ := range addr {
+		addr[i] = s[i] != t[i]
+	}
+	return &BoolAddress{addr}
+}
+
+func (self *BoolAddress) String() string {
+	a := self.addr
+	s := []byte(zerosBin)[:len(a)]
+	for i, one := range a {
+		if one {
+			s[i] = byte('1')
+		}
+	}
+	return string(s)
+}
+
+func (self *BoolAddress) PO(val PotVal, pos int) (po int, eq bool) {
+	a := self.addr
+	b := val.(*BoolAddress).addr
+	for po = pos; po < len(b); po++ {
+		if a[po] != b[po] {
+			return po, false
+		}
+	}
+	return po, true
 }
