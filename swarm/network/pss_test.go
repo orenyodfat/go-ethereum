@@ -663,6 +663,142 @@ func TestPssFullLinearEcho(t *testing.T) {
 	t.Log("Simulation Passed:")
 }
 
+
+// pss simulation test
+// (simnodes running protocols)
+func TestPssFullEvent(t *testing.T) {
+
+	var action func(ctx context.Context) error
+	var check func(ctx context.Context, id *adapters.NodeId) (bool, error)
+	var ctx context.Context
+	var result *simulations.StepResult
+	var timeout time.Duration
+	var cancel context.CancelFunc
+
+	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &PssTestPayload{})
+	topic, _ := MakeTopic(protocolName, protocolVersion)
+
+	trigger := make(chan *adapters.NodeId)
+	net := simulations.NewNetwork(&simulations.NetworkConfig{
+		Id:      "0",
+		Backend: true,
+	})
+	testpeers := make(map[*adapters.NodeId]*pssTestPeer)
+	nodes := newPssSimulationTester(t, 2, 0, net, trigger, vct, protocolName, protocolVersion, testpeers)
+	ids := []*adapters.NodeId{}
+
+	action = func(ctx context.Context) error {
+		
+		for id, _ := range nodes {
+			ids = append(ids, id)
+		}
+		
+		if err := net.Connect(ids[0], ids[1]); err != nil {
+			return err
+		}
+		nodes[ids[1]].Pss.registerFeed(topic)
+		return nil
+	}
+	check = func(ctx context.Context, id *adapters.NodeId) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+
+		node, ok := nodes[id]
+		if !ok {
+			return false, fmt.Errorf("unknown node: %s (%v)", id, node)
+		} else {
+			log.Trace(fmt.Sprintf("sim check ok node %v", id))
+		}
+
+		return true, nil
+	}
+
+	timeout = 10 * time.Second
+	ctx, cancel = context.WithTimeout(context.Background(), timeout)
+
+	result = simulations.NewSimulation(net).Run(ctx, &simulations.Step{
+		Action:  action,
+		Trigger: trigger,
+		Expect: &simulations.Expectation{
+			Nodes: ids,
+			Check: check,
+		},
+	})
+	if result.Error != nil {
+		t.Fatalf("simulation failed: %s", result.Error)
+	}
+	cancel()
+
+	// wait for kademlia
+	time.Sleep(time.Second)
+	
+	trigger = make(chan *adapters.NodeId)
+	// subscribe for the event on the target node
+	subch := make(chan []byte)
+	subchtwo := make(chan []byte)
+	sub, _ := nodes[ids[1]].Subscribe(&topic, subch)
+	subtwo, _ := nodes[ids[1]].Subscribe(&topic, subchtwo)
+	
+	action = func(ctx context.Context) error {
+		code, _ := vct.GetCode(&PssTestPayload{})
+		msgbytes, _ := makeMsg(code, &PssTestPayload{
+			Data: "ping",
+		})
+		go func() {
+			oaddr := nodes[ids[1]].OverlayAddr()
+			err := nodes[ids[0]].Pss.Send(oaddr, topic, msgbytes)
+			if err != nil {
+				t.Fatalf("could not send pss: %v", err)
+			}
+		
+			time.Sleep(time.Second)
+			trigger <- ids[1]
+		}()
+		return nil
+	}
+	check = func(ctx context.Context, id *adapters.NodeId) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+
+		// also need to know if the protocolpeer is set up
+		log.Trace(fmt.Sprintf("waiting for msg on subscribe"))
+		
+		got := <- subch
+		log.Trace(fmt.Sprintf("sub1 got msg %v", got))
+		
+		got = <- subchtwo
+		log.Trace(fmt.Sprintf("sub2 got msg %v", got))
+		
+		sub.Unsubscribe()
+		subtwo.Unsubscribe()
+		return  true, nil
+	}
+
+	timeout = 10 * time.Second
+	ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	result = simulations.NewSimulation(net).Run(ctx, &simulations.Step{
+		Action:  action,
+		Trigger: trigger,
+		Expect: &simulations.Expectation{
+			Nodes: []*adapters.NodeId{ids[1]},
+			Check: check,
+		},
+	})
+	if result.Error != nil {
+		t.Fatalf("simulation failed: %s", result.Error)
+	}
+
+	t.Log("Simulation Passed:")
+}
+
 func TestPssSimpleSelf(t *testing.T) {
 	//var err error
 	name := "foo"
@@ -1118,7 +1254,7 @@ func makePss(addr []byte) *Pss {
 
 	overlay := NewKademlia(addr, kp)
 	ps := NewPss(overlay, pp)
-	overlay.Prune(time.Tick(time.Millisecond * 250))
+	//overlay.Prune(time.Tick(time.Millisecond * 250))
 	return ps
 }
 
@@ -1171,7 +1307,13 @@ func makePssHandleForward(ps *Pss) func(msg interface{}) error {
 	return func(msg interface{}) error {
 		pssmsg := msg.(*PssMsg)
 		if ps.isSelfRecipient(pssmsg) {
-			log.Trace("pss for us .. yay!")
+			log.Trace("pss for us .. alerting subscribers!")
+			env := pssmsg.Payload
+			umsg := env.Payload // this will be rlp encrypted
+			err := ps.alertSubscribers(&env.Topic, umsg)
+			if err != nil {
+				return err
+			}
 		} else {
 			log.Trace("passing on pss")
 			return ps.Forward(pssmsg)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
@@ -121,6 +122,7 @@ type Pss struct {
 	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
+	events map[PssTopic]*event.Feed				// subscriptions for each topic
 	fwdcache map[pssDigest]pssCacheEntry                        // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
 	cachettl time.Duration                                      // how long to keep messages in fwdcache
 	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
@@ -148,6 +150,7 @@ func NewPss(k Overlay, params *PssParams) *Pss {
 		//peerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		peerPool: make(map[pot.Address]map[PssTopic]p2p.MsgReadWriter, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
+		events: make(map[PssTopic]*event.Feed),
 		fwdcache: make(map[pssDigest]pssCacheEntry),
 		cachettl: params.Cachettl,
 		hasher:   storage.MakeHashFunc,
@@ -210,11 +213,22 @@ func (self *Pss) checkFwdCache(addr []byte, digest pssDigest) bool {
 func (self *Pss) Register(topic PssTopic, handler func(msg []byte, p *p2p.Peer, from []byte) error) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
-	self.handlers[topic] = handler
+	self.handlers[topic] = handler 
+	self.registerFeed(topic)
 	return nil
 }
 
-// Retrieves the handler function registered by *Pss.Register()
+func (self *Pss) Subscribe(topic *PssTopic, ch chan []byte) (event.Subscription, error) {
+	_, ok := self.events[*topic]
+	if !ok {
+		return nil, fmt.Errorf("No feed registered for topic %v", topic)
+	}
+	sub := self.events[*topic].Subscribe(ch)
+	log.Trace("new pss subscribe", "topic", topic, "sub", sub)
+	return sub, nil
+}
+
+// Retrieves the handler function registered bys *Pss.Register()
 func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -261,6 +275,19 @@ func (self *Pss) isActive(id pot.Address, topic PssTopic) bool {
 		return false
 	}
 	return true
+}
+
+func (self *Pss) registerFeed(topic PssTopic) {
+	self.events[topic] = &event.Feed{}
+}
+
+func (self *Pss) alertSubscribers(topic *PssTopic, msg []byte) error {
+	feed, ok := self.events[*topic]
+	if !ok {
+		return fmt.Errorf("No subscriptions registered for topic %v", topic)
+	}
+	log.Trace(fmt.Sprintf("pss sent to %d subscribers", feed.Send(msg)))
+	return nil
 }
 
 // Sends a message using pss. The message could be anything at all, and will be handled by whichever handler function is mapped to PssTopic using *Pss.Register()
