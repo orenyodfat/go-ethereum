@@ -210,6 +210,17 @@ func (self *Swarm) Start(net *p2p.Server) error {
 	if self.pssEnabled {
 		pssparams := network.NewPssParams()
 		self.pss = network.NewPss(self.hive.Overlay, pssparams)
+		
+		// for testing purposes, shold be removed in production environment!!
+		pingtopic, _ := network.MakeTopic("pss", 1)
+		self.pss.Register(pingtopic, func(msg []byte, p *p2p.Peer, from []byte) error {
+			if bytes.Equal([]byte("ping"), msg) {
+				log.Trace(fmt.Sprintf("swarm pss ping from %x sending pong", common.ByteLabel(from)))
+				self.pss.Send(from, pingtopic, []byte("pong"))
+			}
+			return nil
+		})
+		
 		log.Debug("Pss started: %v", self.pss)
 	}
 	
@@ -264,8 +275,26 @@ func (self *Swarm) Protocols() []p2p.Protocol {
 	
 	srv := func(p network.Peer) error {
 		if self.pssEnabled {
-			//p.Register(&PssMsg{}, self.pssFunc)
-			log.Warn("pss is enabled, but handler not yet implemented - it won't work yet, sorry")
+			p.Register(&network.PssMsg{}, func(msg interface{}) error {
+				pssmsg := msg.(*network.PssMsg)
+
+				if self.pss.IsSelfRecipient(pssmsg) {
+					log.Trace("pss for us, yay! ... let's process!")
+					env := pssmsg.Payload
+					umsg := env.Payload
+					f := self.pss.GetHandler(env.Topic)
+					if f == nil {
+						return fmt.Errorf("No registered handler for topic '%s'", env.Topic)
+					}
+					nid := adapters.NewNodeId(env.SenderUAddr)
+					p := p2p.NewPeer(nid.NodeID, fmt.Sprintf("%x", common.ByteLabel(nid.Bytes())), []p2p.Cap{})
+					return f(umsg, p, env.SenderOAddr)
+				} else {
+					log.Trace("pss was for someone else :'( ... forwarding")
+					return self.pss.Forward(pssmsg)
+				}
+				return nil
+			})
 		}
 		self.hive.Add(p)
 		p.DisconnectHook(func(err error) {

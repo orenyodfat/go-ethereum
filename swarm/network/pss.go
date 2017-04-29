@@ -213,7 +213,10 @@ func (self *Pss) checkFwdCache(addr []byte, digest pssDigest) bool {
 func (self *Pss) Register(topic PssTopic, handler func(msg []byte, p *p2p.Peer, from []byte) error) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
-	self.handlers[topic] = handler 
+	self.handlers[topic] = func(msg []byte, p *p2p.Peer, from []byte) error {
+		self.alertSubscribers(&topic, msg)
+		return handler(msg, p, from)
+	}
 	self.registerFeed(topic)
 	return nil
 }
@@ -227,6 +230,16 @@ func (self *Pss) Subscribe(topic *PssTopic, ch chan []byte) (event.Subscription,
 	log.Trace("new pss subscribe", "topic", topic, "sub", sub)
 	return sub, nil
 }
+
+/*
+func (self *Pss) Unsubscribe(topic *PssTopic) error {
+	feed, ok := self.events[*topic]
+	if !ok {
+		return fmt.Errorf("No feed registered for topic %v", topic)
+	}
+	feed.Unsubscribe()
+	return nil
+}*/
 
 // Retrieves the handler function registered bys *Pss.Register()
 func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) error {
@@ -286,7 +299,8 @@ func (self *Pss) alertSubscribers(topic *PssTopic, msg []byte) error {
 	if !ok {
 		return fmt.Errorf("No subscriptions registered for topic %v", topic)
 	}
-	log.Trace(fmt.Sprintf("pss sent to %d subscribers", feed.Send(msg)))
+	numsent := feed.Send(msg)
+	log.Trace(fmt.Sprintf("pss sent to %d subscribers", numsent))
 	return nil
 }
 
@@ -465,8 +479,12 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 	return nil
 }
 
-func (ps *Pss) isSelfRecipient(msg *PssMsg) bool {
-	if bytes.Equal(msg.GetRecipient(), ps.Overlay.GetAddr().OverlayAddr()) {
+func (self *Pss) IsSelfRecipient(msg *PssMsg) bool {
+	return self.isSelfRecipient(msg)
+}
+
+func (self *Pss) isSelfRecipient(msg *PssMsg) bool {
+	if bytes.Equal(msg.GetRecipient(), self.Overlay.GetAddr().OverlayAddr()) {
 		return true
 	}
 	return false
