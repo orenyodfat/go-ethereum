@@ -1,0 +1,111 @@
+{
+"@context": "http://schema.org",
+"@type": "MusicGroup",
+"@id": "a link to the group id (metaid?)",
+"MessageSender" : "Warner Music Group",
+"SentOnBehalfOf" :"Warner Music Group",
+"name": "Slipknot",
+"foundingLocation": {
+  "@type": "City",
+  "name": "Liverpool"
+},
+"foundingDate": "",
+"dissolutionDate": "",
+"genre": "Metal",
+"album":[ {
+  "@type": "MusicAlbum",
+  "name": "XIX",
+  "image" :"swarm.../../album.jpg",
+  "license": {
+     "type": "SubscriptionModel",
+     "territory":["nz","us"]
+   },
+  "alternateName": "",
+  "@id": "a link to the asset on swarm",
+  "datePublished": "2014",
+  "tracks": [
+    {
+      "@type": "MusicRecording",
+      "position": "1",
+      "name": "",
+      "url": "swarm link",
+      "duration": ""
+    },
+    {
+      "@type": "MusicRecording",
+      "position": "2",
+      "name": "",
+      "url": "swarm link",
+      "duration": ""
+    }]},
+    {
+        "@type": "MusicAlbum",
+        "name": "Sarcastrophe",
+        "alternateName": "",
+        "@id": "a link to the asset on swarm",
+        "license": {
+           "type": "PayAsYouGoModel",
+           "territory":"au"
+         },
+        "datePublished": "2014",
+        "track": [
+          {
+            "@type": "MusicRecording",
+            "position": "1",
+            "name": "",
+            "url": "swarm link",
+            "duration": ""
+          },
+          {
+            "@type": "MusicRecording",
+            "position": "2",
+            "name": "",
+            "url": "swarm link",
+            "duration": ""
+          }
+  ]
+}
+],
+"member": [
+{
+  "@type": "OrganizationRole",
+  "member": {
+    "@type": "Person",
+    "name": "Chris Claypool"
+  },
+  "startDate": "1957",
+  "endDate": "1970",
+  "roleName": ["Assistant Engineer"]
+},
+{
+  "@type": "OrganizationRole",
+  "member": {
+    "@type": "Person",
+    "name": "Joe Joe Barresi"
+  },
+  "startDate": "1957",
+  "endDate": "1970",
+  "roleName": ["Mixer", "lead vocals"]
+},
+{
+  "@type": "OrganizationRole",
+  "member": {
+    "@type": "Person",
+    "name": "George Harrison"
+  },
+  "startDate": "1958",
+  "endDate": "1970",
+  "roleName": ["guitar", "lead vocals"]
+},
+{
+  "@type": "OrganizationRole",
+  "member": {
+    "@type": "Person",
+    "name": "Ringo Starr"
+  },
+  "startDate": "1962",
+  "endDate": "1970",
+  "roleName": "drums"
+}
+]
+}
