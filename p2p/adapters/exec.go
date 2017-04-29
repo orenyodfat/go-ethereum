@@ -2,6 +2,8 @@ package adapters
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,15 +18,15 @@ import (
 	"time"
 
 	"github.com/docker/docker/pkg/reexec"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// serviceFunc returns a node.ServiceConstructor which can be used to boot
-// devp2p nodes
-type serviceFunc func(id *NodeId) node.ServiceConstructor
+// serviceFunc returns a node.Service which can be used to boot devp2p nodes
+type serviceFunc func(id *NodeId) node.Service
 
 // serviceFuncs is a map of registered services which are used to boot devp2p
 // nodes
@@ -52,15 +54,16 @@ type ExecNode struct {
 	Dir     string
 	Config  *node.Config
 	Cmd     *exec.Cmd
-	Client  *rpc.Client
 	Info    *p2p.NodeInfo
 
+	client *rpc.Client
 	newCmd func() *exec.Cmd
+	key    *ecdsa.PrivateKey
 }
 
 // NewExecNode creates a new ExecNode which will run the given service using a
 // sub-directory of the given baseDir
-func NewExecNode(id *NodeId, service, baseDir string) (*ExecNode, error) {
+func NewExecNode(id *NodeId, key *ecdsa.PrivateKey, service, baseDir string) (*ExecNode, error) {
 	if _, exists := serviceFuncs[service]; !exists {
 		return nil, fmt.Errorf("unknown node service %q", service)
 	}
@@ -83,6 +86,7 @@ func NewExecNode(id *NodeId, service, baseDir string) (*ExecNode, error) {
 		Service: service,
 		Dir:     dir,
 		Config:  &conf,
+		key:     key,
 	}
 	node.newCmd = node.execCommand
 	return node, nil
@@ -96,9 +100,14 @@ func (n *ExecNode) Addr() []byte {
 	return []byte(n.Info.Enode)
 }
 
-// Start exec's the node passing the ID and service as command line arguments
-// and the node config encoded as JSON in the _P2P_NODE_CONFIG environment
-// variable
+func (n *ExecNode) Client() (*rpc.Client, error) {
+	return n.client, nil
+}
+
+// Start exec's the node passing the ID and service as command line arguments,
+// the node config encoded as JSON in the _P2P_NODE_CONFIG environment
+// variable and the node's private key hex-endoded in the _P2P_NODE_KEY
+// environment variable
 func (n *ExecNode) Start() (err error) {
 	if n.Cmd != nil {
 		return errors.New("already started")
@@ -116,6 +125,9 @@ func (n *ExecNode) Start() (err error) {
 		return fmt.Errorf("error generating node config: %s", err)
 	}
 
+	// encode the private key
+	key := hex.EncodeToString(crypto.FromECDSA(n.key))
+
 	// create a net.Pipe for RPC communication over stdin / stdout
 	pipe1, pipe2 := net.Pipe()
 
@@ -124,18 +136,21 @@ func (n *ExecNode) Start() (err error) {
 	cmd.Stdin = pipe1
 	cmd.Stdout = pipe1
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), fmt.Sprintf("_P2P_NODE_CONFIG=%s", conf))
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("_P2P_NODE_CONFIG=%s", conf),
+		fmt.Sprintf("_P2P_NODE_KEY=%s", key),
+	)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("error starting node: %s", err)
 	}
 	n.Cmd = cmd
 
 	// create the RPC client and load the node info
-	n.Client = rpc.NewClientWithConn(pipe2)
+	n.client = rpc.NewClientWithConn(pipe2)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var info p2p.NodeInfo
-	if err := n.Client.CallContext(ctx, &info, "admin_nodeInfo"); err != nil {
+	if err := n.client.CallContext(ctx, &info, "admin_nodeInfo"); err != nil {
 		return fmt.Errorf("error getting node info: %s", err)
 	}
 	n.Info = &info
@@ -163,9 +178,9 @@ func (n *ExecNode) Stop() error {
 		n.Cmd = nil
 	}()
 
-	if n.Client != nil {
-		n.Client.Close()
-		n.Client = nil
+	if n.client != nil {
+		n.client.Close()
+		n.client = nil
 		n.Info = nil
 	}
 
@@ -182,24 +197,6 @@ func (n *ExecNode) Stop() error {
 	case <-time.After(5 * time.Second):
 		return n.Cmd.Process.Kill()
 	}
-}
-
-// Connect connects the node to the given addr by calling the Admin.AddPeer
-// IPC method
-func (n *ExecNode) Connect(addr []byte) error {
-	if n.Client == nil {
-		return errors.New("node not started")
-	}
-	return n.Client.Call(nil, "admin_addPeer", string(addr))
-}
-
-// Disconnect disconnects the node from the given addr by calling the
-// Admin.RemovePeer IPC method
-func (n *ExecNode) Disconnect(addr []byte) error {
-	if n.Client == nil {
-		return errors.New("node not started")
-	}
-	return n.Client.Call(nil, "admin_removePeer", string(addr))
 }
 
 func init() {
@@ -230,11 +227,23 @@ func execP2PNode() {
 		log.Crit("error decoding _P2P_NODE_CONFIG", "err", err)
 	}
 
-	// lookup the service constructor
-	service, exists := serviceFuncs[serviceName]
+	// decode the private key
+	keyEnv := os.Getenv("_P2P_NODE_KEY")
+	if keyEnv == "" {
+		log.Crit("missing _P2P_NODE_KEY")
+	}
+	key, err := hex.DecodeString(keyEnv)
+	if err != nil {
+		log.Crit("error decoding _P2P_NODE_KEY", "err", err)
+	}
+	conf.P2P.PrivateKey = crypto.ToECDSA(key)
+
+	// initialize the service
+	serviceFunc, exists := serviceFuncs[serviceName]
 	if !exists {
 		log.Crit(fmt.Sprintf("unknown node service %q", serviceName))
 	}
+	service := serviceFunc(id)
 
 	// use explicit IP address in ListenAddr so that Enode URL is usable
 	if strings.HasPrefix(conf.P2P.ListenAddr, ":") {
@@ -251,15 +260,9 @@ func execP2PNode() {
 	}
 
 	// start the devp2p stack
-	stack, err := node.New(&conf)
+	stack, err := startP2PNode(&conf, service)
 	if err != nil {
-		log.Crit("error creating node", "err", err)
-	}
-	if err := stack.Register(service(id)); err != nil {
-		log.Crit("error registering service", "err", err)
-	}
-	if err := stack.Start(); err != nil {
-		log.Crit("error starting node", "err", err)
+		log.Crit("error starting p2p node", "err", err)
 	}
 
 	// use stdin / stdout for RPC to avoid the parent needing to access
@@ -281,6 +284,94 @@ func execP2PNode() {
 	}()
 
 	stack.Wait()
+}
+
+func startP2PNode(conf *node.Config, service node.Service) (*node.Node, error) {
+	stack, err := node.New(conf)
+	if err != nil {
+		return nil, err
+	}
+
+	constructor := func(s node.Service) node.ServiceConstructor {
+		return func(ctx *node.ServiceContext) (node.Service, error) {
+			return s, nil
+		}
+	}
+
+	// register the peer events API
+	//
+	// TODO: move this to node.PrivateAdminAPI once the following is merged:
+	//       https://github.com/ethereum/go-ethereum/pull/13885
+	if err := stack.Register(constructor(&PeerAPI{stack.Server})); err != nil {
+		return nil, err
+	}
+
+	if err := stack.Register(constructor(service)); err != nil {
+		return nil, err
+	}
+	if err := stack.Start(); err != nil {
+		return nil, err
+	}
+	return stack, nil
+}
+
+// PeerAPI is used to expose peer events under the "eth" RPC namespace.
+//
+// TODO: move this to node.PrivateAdminAPI and expose under the "admin"
+//       namespace once the following is merged:
+//       https://github.com/ethereum/go-ethereum/pull/13885
+type PeerAPI struct {
+	server func() p2p.Server
+}
+
+func (p *PeerAPI) Protocols() []p2p.Protocol {
+	return nil
+}
+
+func (p *PeerAPI) APIs() []rpc.API {
+	return []rpc.API{{
+		Namespace: "eth",
+		Version:   "1.0",
+		Service:   p,
+	}}
+}
+
+func (p *PeerAPI) Start(p2p.Server) error {
+	return nil
+}
+
+func (p *PeerAPI) Stop() error {
+	return nil
+}
+
+// PeerEvents creates an RPC sunscription which receives peer events from the
+// underlying p2p.Server
+func (p *PeerAPI) PeerEvents(ctx context.Context) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	go func() {
+		events := make(chan *p2p.PeerEvent)
+		sub := p.server().SubscribePeers(events)
+		defer sub.Unsubscribe()
+
+		for {
+			select {
+			case event := <-events:
+				notifier.Notify(rpcSub.ID, event)
+			case <-rpcSub.Err():
+				return
+			case <-notifier.Closed():
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
 }
 
 // stdioConn wraps os.Stdin / os.Stdout with a nop Close method so we can

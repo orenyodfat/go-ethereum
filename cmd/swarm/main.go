@@ -116,6 +116,9 @@ var (
 	SwarmUploadMimeType = cli.StringFlag{
 		Name:  "mime",
 		Usage: "force mime type",
+	PssEnabledFlag = cli.BoolFlag{
+		Name: "pss",
+		Usage: "Enable pss (message passing over swarm)",
 	}
 	PssEnabledFlag = cli.BoolFlag{
 		Name: "pss",
@@ -459,7 +462,7 @@ func getPassPhrase(prompt string, i int, passwords []string) string {
 	return password
 }
 
-func injectBootnodes(srv *p2p.Server, nodes []string) {
+func injectBootnodes(srv p2p.Server, nodes []string) {
 	for _, url := range nodes {
 		n, err := discover.ParseNode(url)
 		if err != nil {

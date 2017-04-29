@@ -231,17 +231,6 @@ func (self *Pss) Subscribe(topic *PssTopic, ch chan []byte) (event.Subscription,
 	return sub, nil
 }
 
-/*
-func (self *Pss) Unsubscribe(topic *PssTopic) error {
-	feed, ok := self.events[*topic]
-	if !ok {
-		return fmt.Errorf("No feed registered for topic %v", topic)
-	}
-	feed.Unsubscribe()
-	return nil
-}*/
-
-// Retrieves the handler function registered bys *Pss.Register()
 func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -330,7 +319,7 @@ func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
 // Handlers that want to pass on a message should call this directly
 func (self *Pss) Forward(msg *PssMsg) error {
 
-	if self.isSelfRecipient(msg) {
+	if self.IsSelfRecipient(msg) {
 		return errorForwardToSelf
 	}
 
@@ -480,10 +469,6 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 }
 
 func (self *Pss) IsSelfRecipient(msg *PssMsg) bool {
-	return self.isSelfRecipient(msg)
-}
-
-func (self *Pss) isSelfRecipient(msg *PssMsg) bool {
 	if bytes.Equal(msg.GetRecipient(), self.Overlay.GetAddr().OverlayAddr()) {
 		return true
 	}

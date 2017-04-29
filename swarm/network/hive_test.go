@@ -82,7 +82,7 @@ func TestRegisterAndConnect(t *testing.T) {
 		},
 		ticker: make(chan time.Time),
 	}
-	pp.Start(tc.connect, tc.ping)
+	pp.Start(s.TestNodeAdapter, tc.ping)
 	defer pp.Stop()
 	tc.ticker <- time.Now()
 

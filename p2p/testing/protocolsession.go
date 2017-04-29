@@ -25,8 +25,8 @@ type TestMessenger interface {
 }
 
 type TestNodeAdapter interface {
+	p2p.Server
 	GetPeer(id *adapters.NodeId) *adapters.Peer
-	Connect([]byte) error
 }
 
 // exchanges are the basic units of protocol tests
@@ -61,9 +61,9 @@ type Disconnect struct {
 	Error error            // disconnect reason
 }
 
-func NewProtocolSession(na adapters.NodeAdapter, ids []*adapters.NodeId) *ProtocolSession {
+func NewProtocolSession(na TestNodeAdapter, ids []*adapters.NodeId) *ProtocolSession {
 	ps := &ProtocolSession{
-		TestNodeAdapter: na.(TestNodeAdapter),
+		TestNodeAdapter: na,
 		Ids:             ids,
 	}
 	return ps
