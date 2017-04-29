@@ -1,11 +1,3 @@
-// // This module will index and aggregate meta data for later reedeme
-// // It will subscribe to META PSS msgs on the network
-// // When getting a PSS msg it will fetch its payload and :
-// // - Transform it to an object represent the meta data (coalip)
-// // - Create and index
-// // - Aggregate the object
-// // - Send back a replay with the new index
-// // - Inform the network for new index update.
 package meta
 
 import (
