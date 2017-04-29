@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
+	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
+	"github.com/ethereum/go-ethereum/swarm/network"
 )
 
 //
@@ -59,7 +61,7 @@ func TestSendToNode(t *testing.T) {
 	indexer, _ := NewIndexer()
 	indexer.Subscribetometaupdates()
 
-	peerid := "6c67103a14f3588665e994695f799d260d40e7181c8652ea30302cfe831dc79e96440f5abf2702fdc8a52f30dab52cc9eeae8321526aa5d904cd5ccbe5278526"
+	peerid := "b4287791639128495e865a47ee49c8431e2d9dddc9bcea0b8a70a199a78382980cbaeb99fac9c1fb18ae0f261c5106e11a89c3cff74dc560de7d82c162423e68"
 	peeridhex, _ := hex.DecodeString(peerid)
 	nid := adapters.NewNodeId(peeridhex)
 	fmt.Println(nid.NodeID)
@@ -80,31 +82,30 @@ func TestIndexer(t *testing.T) {
 	indexer, _ := NewIndexer()
 	indexer.Subscribetometaupdates()
 
-	//addr := network.RandomAddr()
+	addr := network.RandomAddr()
 
-	//pt := p2ptest.NewProtocolTester(t, network.NodeId(addr), 2, indexer.proto.Run)
+	pt := p2ptest.NewProtocolTester(t, network.NodeId(addr), 2, indexer.proto.Run)
 
-	// code, found := indexer.vct.GetCode(&IndexerPayload{})
-	// if found == false {
-	// 	fmt.Println("not found")
-	// 	return
-	// }
+	code, found := indexer.vct.GetCode(&IndexerPayload{})
+	if found == false {
+		fmt.Println("not found")
+		return
+	}
 	payload, err := createIndexerPayload()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(payload)
 
-	// pt.TestExchanges(
-	// 	p2ptest.Exchange{
-	// 		Triggers: []p2ptest.Trigger{
-	// 			p2ptest.Trigger{
-	// 				Code: code,
-	// 				Msg:  payload,
-	// 				Peer: pt.Ids[0],
-	// 			},
-	// 		},
-	// 	})
+	pt.TestExchanges(
+		p2ptest.Exchange{
+			Triggers: []p2ptest.Trigger{
+				p2ptest.Trigger{
+					Code: code,
+					Msg:  payload,
+					Peer: pt.Ids[0],
+				},
+			},
+		})
 
 	// vct := protocols.NewCodeMap("indexer", uint(1), 65535, &IndexerUpdateNotification{})
 	// code, found = vct.GetCode(&IndexerUpdateNotification{})
