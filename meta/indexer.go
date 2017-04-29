@@ -93,9 +93,11 @@ func (ptp *IndexerPeer) HandleIndexerPayload(msg interface{}) error {
 	log.Trace(fmt.Sprintf("HandleIndexerPayload got message %v", pmsg))
 	if pmsg.Command == "update" {
 
+		fmt.Println(pmsg.Data)
+
 		data, err := getUpdate(pmsg.Data)
 		if err != nil {
-			log.Trace(fmt.Sprintf("error in getUpdate"))
+			log.Trace(fmt.Sprintf("error in getUpdate %v", err.Error()))
 			return err
 		}
 		name, err := getValue(data, "name")
@@ -171,6 +173,12 @@ func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 	payload := &IndexerUpdateNotification{Index: index, Type: "notification", Subtype: subtype}
 
 	fmt.Println("sendUpdateNotification", payload)
+
+	// rw1, _ := p2p.MsgPipe()
+	// go func() {
+	// 	p2p.Send(rw1, 8, [][]byte{{0, 0}})
+	// 	rw1.Close()
+	// }()
 
 	ptp.Send(payload)
 

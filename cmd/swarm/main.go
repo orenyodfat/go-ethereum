@@ -368,7 +368,7 @@ func registerBzzService(ctx *cli.Context, stack *node.Node) {
 		} else {
 			swapEnabled = false
 		}
-		return swarm.NewSwarm(ctx, client, bzzconfig, swapEnabled, syncEnabled, cors, pssEnabled, true)
+		return swarm.NewSwarm(ctx, client, bzzconfig, swapEnabled, syncEnabled, cors, pssEnabled, false)
 	}
 	if err := stack.Register(boot); err != nil {
 		utils.Fatalf("Failed to register the Swarm service: %v", err)

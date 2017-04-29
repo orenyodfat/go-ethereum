@@ -2,6 +2,7 @@ package meta
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -10,8 +11,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
-	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
-	"github.com/ethereum/go-ethereum/swarm/network"
+	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/adapters"
+	"github.com/ethereum/go-ethereum/p2p/protocols"
 )
 
 //
@@ -52,34 +54,58 @@ func createIndexerPayload() (indexerPayload *IndexerPayload, err error) {
 	return &IndexerPayload{Data: string(respbody), Command: "update"}, nil
 
 }
-func TestIndexer(t *testing.T) {
+func TestSendToNode(t *testing.T) {
 	fmt.Println("TestIndexer")
 	indexer, _ := NewIndexer()
 	indexer.Subscribetometaupdates()
-	addr := network.RandomAddr()
 
-	pt := p2ptest.NewProtocolTester(t, network.NodeId(addr), 2, indexer.proto.Run)
+	peerid := "6c67103a14f3588665e994695f799d260d40e7181c8652ea30302cfe831dc79e96440f5abf2702fdc8a52f30dab52cc9eeae8321526aa5d904cd5ccbe5278526"
+	peeridhex, _ := hex.DecodeString(peerid)
+	nid := adapters.NewNodeId(peeridhex)
+	fmt.Println(nid.NodeID)
+	peer := p2p.NewPeer(nid.NodeID, adapters.Name(nid.Bytes()), []p2p.Cap{})
+	fmt.Println(peer.ID())
 
-	code, found := indexer.vct.GetCode(&IndexerPayload{})
-	if found == false {
-		fmt.Println("not found")
-		return
-	}
 	payload, err := createIndexerPayload()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pt.TestExchanges(
-		p2ptest.Exchange{
-			Triggers: []p2ptest.Trigger{
-				p2ptest.Trigger{
-					Code: code,
-					Msg:  payload,
-					Peer: pt.Ids[0],
-				},
-			},
-		})
+	wr, _ := p2p.MsgPipe()
+
+	protocols.NewPeer(peer, indexer.vct, wr).Send(payload)
+}
+func TestIndexer(t *testing.T) {
+	fmt.Println("TestIndexer")
+	indexer, _ := NewIndexer()
+	indexer.Subscribetometaupdates()
+
+	//addr := network.RandomAddr()
+
+	//pt := p2ptest.NewProtocolTester(t, network.NodeId(addr), 2, indexer.proto.Run)
+
+	// code, found := indexer.vct.GetCode(&IndexerPayload{})
+	// if found == false {
+	// 	fmt.Println("not found")
+	// 	return
+	// }
+	payload, err := createIndexerPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println(payload)
+
+	// pt.TestExchanges(
+	// 	p2ptest.Exchange{
+	// 		Triggers: []p2ptest.Trigger{
+	// 			p2ptest.Trigger{
+	// 				Code: code,
+	// 				Msg:  payload,
+	// 				Peer: pt.Ids[0],
+	// 			},
+	// 		},
+	// 	})
+
 	// vct := protocols.NewCodeMap("indexer", uint(1), 65535, &IndexerUpdateNotification{})
 	// code, found = vct.GetCode(&IndexerUpdateNotification{})
 	// if found == false {
