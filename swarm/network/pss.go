@@ -28,8 +28,8 @@ const (
 	digestLength                = 64
 	digestCapacity              = 256
 	defaultDigestCacheTTL       = time.Second
-	PingTopicName				= "pss"
-	PingTopicVersion			= 1
+	PingTopicName               = "pss"
+	PingTopicVersion            = 1
 )
 
 var (
@@ -124,7 +124,7 @@ type Pss struct {
 	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
-	events map[PssTopic]*event.Feed				// subscriptions for each topic
+	events   map[PssTopic]*event.Feed                           // subscriptions for each topic
 	fwdcache map[pssDigest]pssCacheEntry                        // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
 	cachettl time.Duration                                      // how long to keep messages in fwdcache
 	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
@@ -152,7 +152,7 @@ func NewPss(k Overlay, params *PssParams) *Pss {
 		//peerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		peerPool: make(map[pot.Address]map[PssTopic]p2p.MsgReadWriter, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
-		events: make(map[PssTopic]*event.Feed),
+		events:   make(map[PssTopic]*event.Feed),
 		fwdcache: make(map[pssDigest]pssCacheEntry),
 		cachettl: params.Cachettl,
 		hasher:   storage.MakeHashFunc,
@@ -404,7 +404,7 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 	pmsg, _ := makeMsg(msg.Code, ifc)
 
 	prw.Pss.Send(to, *prw.topic, pmsg)
-	
+
 	return nil
 }
 
@@ -486,6 +486,10 @@ func (self *Pss) GetPingHandler() func([]byte, *p2p.Peer, []byte) error {
 		}
 		return nil
 	}
+}
+
+func MakeMsg(code uint64, msg interface{}) ([]byte, error) {
+	return makeMsg(code, msg)
 }
 
 // Pre-Whisper placeholder
