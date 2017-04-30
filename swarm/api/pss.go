@@ -20,18 +20,18 @@ func NewPssApi(ps *network.Pss) *PssApi {
 func (self *PssApi) NewMsg(ctx context.Context, topic network.PssTopic) (*rpc.Subscription, error) {
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
-		log.Error("subscribe not supported")
+		return nil, fmt.Errorf("Subscribe not supported")
 	}
 	
 	sub := notifier.CreateSubscription()
 	
+	ch := make(chan []byte)
+	psssub, err := self.Pss.Subscribe(&topic, ch)
+	if err != nil {
+		return nil, fmt.Errorf("pss subscription topic %v (rpc sub id %v) failed: %v", topic, sub.ID, err)
+	}
+		
 	go func(topic network.PssTopic) {
-		ch := make(chan []byte)
-		psssub, err := self.Pss.Subscribe(&topic, ch)
-		if err != nil {
-			log.Warn(fmt.Sprintf("pss subscription topic %v (rpc sub id %v) failed: %v", topic, sub.ID, err))
-			return
-		}
 		for {
 			select {
 				case msg := <-ch:

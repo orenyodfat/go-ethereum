@@ -116,9 +116,6 @@ var (
 	SwarmUploadMimeType = cli.StringFlag{
 		Name:  "mime",
 		Usage: "force mime type",
-	PssEnabledFlag = cli.BoolFlag{
-		Name: "pss",
-		Usage: "Enable pss (message passing over swarm)",
 	}
 	PssEnabledFlag = cli.BoolFlag{
 		Name: "pss",

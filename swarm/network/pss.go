@@ -28,6 +28,8 @@ const (
 	digestLength                = 64
 	digestCapacity              = 256
 	defaultDigestCacheTTL       = time.Second
+	PingTopicName				= "pss"
+	PingTopicVersion			= 1
 )
 
 var (
@@ -473,6 +475,17 @@ func (self *Pss) IsSelfRecipient(msg *PssMsg) bool {
 		return true
 	}
 	return false
+}
+
+func (self *Pss) GetPingHandler() func([]byte, *p2p.Peer, []byte) error {
+	pingtopic, _ := MakeTopic(PingTopicName, PingTopicVersion)
+	return func(msg []byte, p *p2p.Peer, from []byte) error {
+		if bytes.Equal([]byte("ping"), msg) {
+			log.Trace(fmt.Sprintf("swarm pss ping from %x sending pong", common.ByteLabel(from)))
+			self.Send(from, pingtopic, []byte("pong"))
+		}
+		return nil
+	}
 }
 
 // Pre-Whisper placeholder

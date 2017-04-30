@@ -33,7 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	//"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/api"
 	httpapi "github.com/ethereum/go-ethereum/swarm/api/http"
@@ -177,14 +177,14 @@ Start is called when the stack is started
 */
 // implements the node.Service interface
 func (self *Swarm) Start(net p2p.Server) error {
-	connectPeer := func(url string) error {
+	/*connectPeer := func(url string) error {
 		node, err := discover.ParseNode(url)
 		if err != nil {
 			return fmt.Errorf("invalid node URL: %v", err)
 		}
 		net.AddPeer(node)
 		return nil
-	}
+	}*/
 	// set chequebook
 	if self.swapEnabled {
 		ctx := context.Background() // The initial setup has no deadline.
@@ -199,9 +199,8 @@ func (self *Swarm) Start(net p2p.Server) error {
 
 	log.Warn(fmt.Sprintf("Starting Swarm service"))
 	
-	glog.V(logger.Warn).Infof("Starting Swarm service")
 	self.hive.Start(
-		connectPeer,
+		net,
 		func () <-chan time.Time{
 			return time.NewTicker(time.Second).C
 		},
@@ -215,13 +214,7 @@ func (self *Swarm) Start(net p2p.Server) error {
 		
 		// for testing purposes, shold be removed in production environment!!
 		pingtopic, _ := network.MakeTopic("pss", 1)
-		self.pss.Register(pingtopic, func(msg []byte, p *p2p.Peer, from []byte) error {
-			if bytes.Equal([]byte("ping"), msg) {
-				log.Trace(fmt.Sprintf("swarm pss ping from %x sending pong", common.ByteLabel(from)))
-				self.pss.Send(from, pingtopic, []byte("pong"))
-			}
-			return nil
-		})
+		self.pss.Register(pingtopic, self.pss.GetPingHandler())
 		
 		log.Debug("Pss started: %v", self.pss)
 	}

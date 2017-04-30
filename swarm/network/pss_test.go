@@ -100,11 +100,11 @@ func (n *pssTestNode) UnderlayAddr() []byte {
 }
 
 // the content of the msgs we're sending in the tests
-type PssTestPayload struct {
+type pssTestPayload struct {
 	Data string
 }
 
-func (m *PssTestPayload) String() string {
+func (m *pssTestPayload) String() string {
 	return m.Data
 }
 
@@ -260,7 +260,7 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 	expectnodesids := []*adapters.NodeId{}                 // the nodes to expect on (needed by checker)
 	expectnodesresults := make(map[*adapters.NodeId][]int) // which messages expect actually got
 
-	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &PssTestPayload{})
+	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &pssTestPayload{})
 	topic, _ := MakeTopic(protocolName, protocolVersion)
 
 	trigger := make(chan *adapters.NodeId)
@@ -362,10 +362,10 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 
 	// send and monitor receive of pss
 	action = func(ctx context.Context) error {
-		code, _ := vct.GetCode(&PssTestPayload{})
+		code, _ := vct.GetCode(&pssTestPayload{})
 
 		for i := 0; i < len(sends); i += 2 {
-			msgbytes, _ := makeMsg(code, &PssTestPayload{
+			msgbytes, _ := makeMsg(code, &pssTestPayload{
 				Data: fmt.Sprintf("%v", i+1),
 			})
 			go func(i int, expectnodesresults map[*adapters.NodeId][]int) {
@@ -459,8 +459,6 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 	}
 }
 
-// pss simulation test
-// (simnodes running protocols)
 func TestPssFullLinearEcho(t *testing.T) {
 
 	var action func(ctx context.Context) error
@@ -473,7 +471,7 @@ func TestPssFullLinearEcho(t *testing.T) {
 	var firstpssnode *adapters.NodeId
 	var secondpssnode *adapters.NodeId
 
-	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &PssTestPayload{})
+	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &pssTestPayload{})
 	topic, _ := MakeTopic(protocolName, protocolVersion)
 
 	fullnodes := []*adapters.NodeId{}
@@ -593,8 +591,8 @@ func TestPssFullLinearEcho(t *testing.T) {
 	}
 
 	action = func(ctx context.Context) error {
-		code, _ := vct.GetCode(&PssTestPayload{})
-		msgbytes, _ := makeMsg(code, &PssTestPayload{
+		code, _ := vct.GetCode(&pssTestPayload{})
+		msgbytes, _ := makeMsg(code, &pssTestPayload{
 			Data: "ping",
 		})
 
@@ -641,6 +639,10 @@ func TestPssFullLinearEcho(t *testing.T) {
 	t.Log("Simulation Passed:")
 }
 
+
+
+// test framework below
+
 // numnodes: how many nodes to create
 // pssnodeidx: on which node indices to start the pss
 // net: the simulated network
@@ -653,7 +655,6 @@ func TestPssFullLinearEcho(t *testing.T) {
 func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, net *simulations.Network, trigger chan *adapters.NodeId, vct *protocols.CodeMap, name string, version int, testpeers map[*adapters.NodeId]*pssTestPeer) map[*adapters.NodeId]*pssTestNode {
 	topic, _ := MakeTopic(name, version)
 	nodes := make(map[*adapters.NodeId]*pssTestNode, numnodes)
-	//svcs := make(map[*adapters.NodeId]*pssTestService, numnodes)
 	psss := make(map[*adapters.NodeId]*Pss)
 	net.SetNaf(func(conf *simulations.NodeConfig) adapters.NodeAdapter {
 		node := &pssTestNode{
@@ -674,12 +675,10 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, net *s
 		} else {
 			handlefunc = makePssHandleForward(psss[conf.Id])
 		}
-		//node = newPssTester(t, psss[conf.Id], addr, 0, handlefunc, net, trigger)
 		testservice := newPssTestService(t, handlefunc, node)
 		nodes[conf.Id] = testservice.node
 		svc := adapters.NewSimNode(conf.Id, testservice, net)
 		testservice.Start(svc)
-		//svcs[conf.Id] = testservice
 		return node.SimNode
 	})
 	configs := make([]*simulations.NodeConfig, numnodes)
@@ -710,7 +709,6 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, net *s
 	}
 
 	return nodes
-	//return svcs
 }
 
 type pssTestService struct {
@@ -744,18 +742,6 @@ func (self *pssTestService) Protocols() []p2p.Protocol {
 		ct.Register(m)
 	}
 	ct.Register(&PssMsg{})
-	//Bzz(addr.OverlayAddr(), addr.UnderlayAddr(), ct, srv, nil, nil).Run
-	/*
-		node := &pssTestNode{
-			Hive:        hive,
-			Pss:         ps,
-			NodeAdapter: nil,
-			id:          nid,
-			network:     net,
-			trigger:     trigger,
-			ct:          ct,
-			expectC:     make(chan []int),
-		}*/
 
 	srv := func(p Peer) error {
 		p.Register(&PssMsg{}, self.msgFunc)
@@ -772,6 +758,14 @@ func (self *pssTestService) Protocols() []p2p.Protocol {
 }
 
 func (self *pssTestService) APIs() []rpc.API {
+	/*return []rpc.API{
+		rpc.API{
+			Namespace: "eth",
+			Version:	"0.1/pss",
+			Service:	api.NewPssApi(self.pss),
+			Public:		true,
+		},
+	}*/
 	return nil
 }
 
@@ -794,7 +788,7 @@ func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, testpee
 			testpeer = &pssTestPeer{}
 		}
 		testpeer.Peer = p
-		p.Register(&PssTestPayload{}, testpeer.SimpleHandlePssPayload)
+		p.Register(&pssTestPayload{}, testpeer.SimpleHandlePssPayload)
 		err := p.Run()
 		return err
 	}
@@ -803,7 +797,7 @@ func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, testpee
 }
 
 func makeFakeMsg(ps *Pss, ct *protocols.CodeMap, topic PssTopic, senderaddr PeerAddr, content string) PssMsg {
-	data := PssTestPayload{}
+	data := pssTestPayload{}
 	code, found := ct.GetCode(&data)
 	if !found {
 		return PssMsg{}
@@ -872,21 +866,21 @@ func makePssHandleProtocol(ps *Pss) func(msg interface{}) error {
 // it comes in through
 // Any pointer receiver that has protocols.Peer
 func (ptp *pssTestPeer) SimpleHandlePssPayload(msg interface{}) error {
-	pmsg := msg.(*PssTestPayload)
-	log.Trace(fmt.Sprintf("PssTestPayloadhandler got message %v", pmsg))
+	pmsg := msg.(*pssTestPayload)
+	log.Trace(fmt.Sprintf("pssTestPayloadhandler got message %v", pmsg))
 	if pmsg.Data == "ping" {
 		pmsg.Data = "pong"
-		log.Trace(fmt.Sprintf("PssTestPayloadhandler reply %v", pmsg))
+		log.Trace(fmt.Sprintf("pssTestPayloadhandler reply %v", pmsg))
 		ptp.Send(pmsg)
 	} else if pmsg.Data == "pong" {
 		ptp.successC <- true
 	} else {
 		res, err := strconv.Atoi(pmsg.Data)
 		if err != nil {
-			log.Trace(fmt.Sprintf("PssTestPayloadhandlererr %v", err))
+			log.Trace(fmt.Sprintf("pssTestPayloadhandlererr %v", err))
 			ptp.successC <- false
 		} else {
-			log.Trace(fmt.Sprintf("PssTestPayloadhandler sending %d on chan", pmsg))
+			log.Trace(fmt.Sprintf("pssTestPayloadhandler sending %d on chan", pmsg))
 			ptp.successC <- true
 			ptp.resultC <- res
 		}
