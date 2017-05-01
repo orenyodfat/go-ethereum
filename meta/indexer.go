@@ -84,6 +84,8 @@ func NewIndexer() (self *Indexer, err error) {
 	return self, nil
 }
 
+var indexer *Indexer
+
 //
 func (self *Indexer) Subscribetometaupdates(n *adapters.NodeId) (err error) {
 
@@ -96,12 +98,13 @@ func (self *Indexer) Subscribetometaupdates(n *adapters.NodeId) (err error) {
 
 	addr := network.NewPeerAddrFromNodeId(n)
 	pss := makePss(addr.OverlayAddr())
-	pssprotocol := network.NewPssProtocol(self.pss, &topic, vct, targetproto)
+	pssprotocol := network.NewPssProtocol(pss, &topic, vct, targetproto)
 	pss.Register(topic, pssprotocol.GetHandler())
 	self.pss = pss
 	self.proto = targetproto
 	self.vct = vct
 	self.topic = topic
+	indexer = self
 	return nil
 }
 
@@ -114,7 +117,7 @@ func (self *Indexer) IndexerNotificationSetup() (err error) {
 	//self.proto = targetproto
 	self.vctnotification = vct
 	self.notificationtopic = topic
-
+	indexer.notificationtopic = topic
 	return nil
 }
 
@@ -223,7 +226,7 @@ func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 	b, _ := json.Marshal(payload)
 
 	//pssparams := network.NewPssParams()
-	pss := makePss(indexeradrr)
+	pss := indexer.pss //makePss(indexeradrr)
 	//	pss := network.NewPss(indexeradrr, pssparams)
 	// for testing purposes, shold be removed in production environment!!
 	if ptp.pss == nil {
@@ -234,7 +237,7 @@ func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 
 	//pssparams := network.NewPssParams()
 
-	fmt.Println("sendUpdateNotification", payload)
+	fmt.Println("sendUpdateNotification", payload, indexer.notificationtopic)
 
 	// rw1, _ := p2p.MsgPipe()
 	// go func() {
@@ -244,7 +247,7 @@ func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 
 	//	ptp.Send(payload)
 
-	fmt.Println("sendUpdateNotification done-", indexeradrr)
+	fmt.Println("sendUpdateNotification done-")
 
 }
 

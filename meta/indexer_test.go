@@ -81,7 +81,7 @@ func createIndexerPayload() (indexerPayload *IndexerPayload, err error) {
 	return &IndexerPayload{Data: string(respbody), Command: "update"}, nil
 
 }
-func TestSendToNode(t *testing.T) {
+func testSendToNode(t *testing.T) {
 	fmt.Println("TestIndexer")
 	indexer, _ := NewIndexer()
 	//indexer.Subscribetometaupdates()
@@ -103,7 +103,7 @@ func TestSendToNode(t *testing.T) {
 
 	protocols.NewPeer(peer, indexer.vct, wr).Send(payload)
 }
-func TestIndexer(t *testing.T) {
+func testIndexer(t *testing.T) {
 	fmt.Println("TestIndexer")
 	indexer, _ := NewIndexer()
 	//indexer.Subscribetometaupdates()
@@ -426,15 +426,13 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, net *s
 	}
 	for i, conf := range configs {
 
-		indexer.Subscribetometaupdates(conf.Id)
-		indexer.IndexerNotificationSetup()
-		psss[conf.Id] = indexer.pss
+		addr := network.NewPeerAddrFromNodeId(conf.Id)
+		psss[conf.Id] = makePss(addr.OverlayAddr())
 
 		// addr := network.NewPeerAddrFromNodeId(conf.Id)
 		//
 		// psss[conf.Id] = makePss(addr.OverlayAddr())
 		if i < numfullnodes {
-			fmt.Println("iiiiisdssssssssi", i)
 			tp := &IndexerPeer{
 				Peer: &protocols.Peer{
 					Peer: &p2p.Peer{},
@@ -445,6 +443,10 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, net *s
 				resultC:  make(chan int),
 			}
 			testpeers[conf.Id] = tp
+			indexer.Subscribetometaupdates(conf.Id)
+			indexer.IndexerNotificationSetup()
+			//addr := NewPeerAddrFromNodeId(conf.Id)
+			psss[conf.Id] = indexer.pss
 			//targetprotocol := makeCustomProtocol(name, version, vct, testpeers[conf.Id])
 			//pssprotocol := network.NewPssProtocol(psss[conf.Id], &topic, vct, indexer.proto)
 			//psss[conf.Id].Register(topic, targetprotocol.GetHandler())
