@@ -42,6 +42,7 @@ type Indexer struct {
 	vct               *protocols.CodeMap
 	vctnotification   *protocols.CodeMap
 	proto             *p2p.Protocol
+	protonotification *p2p.Protocol
 	topic             network.PssTopic
 	notificationtopic network.PssTopic
 	name              string
@@ -86,6 +87,9 @@ func NewIndexer() (self *Indexer, err error) {
 
 var indexer *Indexer
 
+var mypsss map[int]*network.Pss = make(map[int]*network.Pss)
+var psssindex int = 0
+
 //
 func (self *Indexer) Subscribetometaupdates(n *adapters.NodeId) (err error) {
 
@@ -98,8 +102,12 @@ func (self *Indexer) Subscribetometaupdates(n *adapters.NodeId) (err error) {
 
 	addr := network.NewPeerAddrFromNodeId(n)
 	pss := makePss(addr.OverlayAddr())
+
 	pssprotocol := network.NewPssProtocol(pss, &topic, vct, targetproto)
 	pss.Register(topic, pssprotocol.GetHandler())
+
+	mypsss[psssindex] = pss
+	psssindex++
 	self.pss = pss
 	self.proto = targetproto
 	self.vct = vct
@@ -113,11 +121,14 @@ func (self *Indexer) IndexerNotificationSetup() (err error) {
 	vct := protocols.NewCodeMap(self.notificationname, uint(self.version), 65535, &IndexerUpdateNotification{})
 	//targetproto := makeIndexerProtocol(self.notificationname, self.version, vct, &IndexerPeer{})
 	topic, _ := network.MakeTopic(self.notificationname, self.version)
+	//pssprotocol := network.NewPssProtocol(self.pss, &topic, vct, targetproto)
+	//self.pss.Register(topic, pssprotocol.GetHandler())
 
 	//self.proto = targetproto
 	self.vctnotification = vct
 	self.notificationtopic = topic
 	indexer.notificationtopic = topic
+	//self.protonotification = targetproto
 	return nil
 }
 
@@ -221,6 +232,11 @@ func createIndex(hash string, key string, Value string) (index *NewIndex) {
 
 func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 
+	// vct := protocols.NewCodeMap(notificationnameconst, uint(1), 65535, &IndexerUpdateNotification{})
+	// notificationtopic, _ := network.MakeTopic(notificationnameconst, notificationversion)
+	// targetproto := makeIndexerProtocol(notificationnameconst, 1, vct, &IndexerPeer{})
+	// pssprotocol := network.NewPssProtocol(indexer.pss, &notificationtopic, vct, targetproto)
+
 	payload := &IndexerUpdateNotification{Index: index, Type: "notification", Subtype: subtype}
 
 	b, _ := json.Marshal(payload)
@@ -232,22 +248,14 @@ func sendUpdateNotification(index NewIndex, ptp *IndexerPeer, subtype string) {
 	if ptp.pss == nil {
 		fmt.Println("ptp.pss ==  nil{")
 	}
+
 	notificationtopic, _ := network.MakeTopic(notificationnameconst, notificationversion)
-	pss.Send(pss.GetAddr().OverlayAddr(), notificationtopic, b)
 
-	//pssparams := network.NewPssParams()
+	for i := 0; i < psssindex; i++ {
+		mypsss[i].Send(pss.GetAddr().OverlayAddr(), notificationtopic, b)
+	}
 
-	fmt.Println("sendUpdateNotification", payload, indexer.notificationtopic)
-
-	// rw1, _ := p2p.MsgPipe()
-	// go func() {
-	// 	p2p.Send(rw1, 8, [][]byte{{0, 0}})
-	// 	rw1.Close()
-	// }()
-
-	//	ptp.Send(payload)
-
-	fmt.Println("sendUpdateNotification done-")
+	fmt.Println("sendUpdateNotification", "from", pss.GetAddr().OverlayAddr(), payload, indexer.notificationtopic)
 
 }
 

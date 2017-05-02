@@ -157,10 +157,11 @@ func testIndexer(t *testing.T) {
 }
 
 func subscribetoindexernotifictions(indexer *Indexer, pss *network.Pss) (err error) {
+
 	ch := make(chan []byte)
 	//fmt.Println("sendUpdateNotification", "from", pss.GetAddr().OverlayAddr())
 	fmt.Println("subscribetoindexernotifictions", indexer.notificationtopic)
-	pss.Register(indexer.notificationtopic, THandler())
+	pss.Register(indexer.notificationtopic, testNotificationsHandler())
 
 	psssub, err := pss.Subscribe(&indexer.notificationtopic, ch)
 	if err != nil {
@@ -583,3 +584,13 @@ func (self *pssTestService) APIs() []rpc.API {
 // 	//overlay.Prune(time.Tick(time.Millisecond * 250))
 // 	return ps
 // }
+
+func testNotificationsHandler() func([]byte, *p2p.Peer, []byte) error {
+	//pingtopic, _ := MakeTopic(PingTopicName, PingTopicVersion)
+	return func(msg []byte, p *p2p.Peer, from []byte) error {
+
+		fmt.Println("got notification")
+
+		return nil
+	}
+}
