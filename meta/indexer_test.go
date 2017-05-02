@@ -158,6 +158,10 @@ func testIndexer(t *testing.T) {
 
 func subscribetoindexernotifictions(indexer *Indexer, pss *network.Pss) (err error) {
 	ch := make(chan []byte)
+	//fmt.Println("sendUpdateNotification", "from", pss.GetAddr().OverlayAddr())
+	fmt.Println("subscribetoindexernotifictions", indexer.notificationtopic)
+	pss.Register(indexer.notificationtopic, THandler())
+
 	psssub, err := pss.Subscribe(&indexer.notificationtopic, ch)
 	if err != nil {
 		return fmt.Errorf("pss subscription topic %v  failed: %v", indexer.notificationtopic, err)
@@ -354,8 +358,11 @@ func TestIndexerPss(t *testing.T) {
 		}
 
 		// also need to know if the protocolpeer is set up
+		fmt.Println("check!")
 		time.Sleep(time.Millisecond * 100)
-		return <-testpeers[ids[0]].successC, nil
+		suc := <-testpeers[ids[0]].successC
+		fmt.Println("check1")
+		return suc, nil
 		//return true, nil
 	}
 
