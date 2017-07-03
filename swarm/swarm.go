@@ -335,6 +335,10 @@ func (self *Swarm) Api() *api.Api {
 	return self.api
 }
 
+func (self *Swarm) Pss() *pss.Pss {
+	return self.pss
+}
+
 // SetChequebook ensures that the local checquebook is set up on chain.
 func (self *Swarm) SetChequebook(ctx context.Context) error {
 	err := self.config.Swap.SetChequebook(ctx, self.backend, self.config.Path)
