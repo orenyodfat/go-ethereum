@@ -426,12 +426,12 @@ func (s *DbStore) Put(chunk *Chunk) {
 	idata := encodeIndex(&index)
 	batch.Put(ikey, idata)
 
-	batch.Put(keyEntryCnt, U64ToBytes(s.entryCnt))
 	s.entryCnt++
-	batch.Put(keyDataIdx, U64ToBytes(s.dataIdx))
+	batch.Put(keyEntryCnt, U64ToBytes(s.entryCnt))
 	s.dataIdx++
-	batch.Put(keyAccessCnt, U64ToBytes(s.accessCnt))
+	batch.Put(keyDataIdx, U64ToBytes(s.dataIdx))
 	s.accessCnt++
+	batch.Put(keyAccessCnt, U64ToBytes(s.accessCnt))
 
 	s.db.Write(batch)
 	if chunk.dbStored != nil {
